@@ -3,13 +3,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 
-interface PlanDay {
+export interface PlanDay {
   day: number;
   title: string;
-  exercises: string[];
+  exercises: ReadonlyArray<string>; // readonly-friendly
 }
+
 interface Props {
-  plan: readonly PlanDay[];
+  plan: ReadonlyArray<PlanDay>;      //  readonly-friendly
   activePlanDay: string;
   onChangeActivePlanDay: (v: string) => void;
   onStartSession: (day: number) => void;

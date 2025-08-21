@@ -2,6 +2,7 @@
 import ProfileTab from "@/components/ProfileTab";
 import PlanTab from "@/components/PlanTab";
 import WorkoutLogTable from "@/components/WorkoutLogTable";
+import { markPRsBeforeInsert } from "@/lib/pr";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
