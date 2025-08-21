@@ -1,6 +1,7 @@
 
 import ProfileTab from "@/components/ProfileTab";
 import PlanTab from "@/components/PlanTab";
+import WorkoutLogTable from "@/components/WorkoutLogTable";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
@@ -10,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Upload, Download, PlusCircle, Edit3, Save, X, Trash2, BarChart3, User } from "lucide-react";
+import { Upload, Download, PlusCircle, BarChart3, User } from "lucide-react";
 
 /* --------------------------------------------
    Plan Data (Final 4-Day Dancer's Split)
@@ -261,9 +262,9 @@ export default function DancerSplitTracker() {
   }[]>([]);
 
   // View state
-  const [sortBy, setSortBy] = useState<"date" | "name" | "volume">("date");
+//  const [sortBy, setSortBy] = useState<"date" | "name" | "volume">("date");
   const [exerciseFilter, setExerciseFilter] = useState<string>("__all");
-  const [editingId, setEditingId] = useState<string | null>(null);
+ // const [editingId, setEditingId] = useState<string | null>(null);
   const [activeTopTab, setActiveTopTab] = useState<string>("plan");
   const [activePlanDay, setActivePlanDay] = useState<string>("1");
 
@@ -301,7 +302,7 @@ export default function DancerSplitTracker() {
     return Array.from(map.values()).sort((a, b) => (a.date < b.date ? -1 : 1));
   }, [workouts, exerciseFilter]);
 
-  const sortedWorkouts = useMemo(() => {
+/*   const sortedWorkouts = useMemo(() => {
     const copy = [...workouts];
     switch (sortBy) {
       case "name":
@@ -314,7 +315,7 @@ export default function DancerSplitTracker() {
         copy.sort((a, b) => (a.date < b.date ? 1 : -1));
     }
     return copy;
-  }, [workouts, sortBy]);
+  }, [workouts, sortBy]); */
 
   // Plan/session helpers
   function startSession(day: number) {
@@ -403,15 +404,6 @@ export default function DancerSplitTracker() {
     if (!fromPlan) setWName("");
   }
 
-  function removeWorkout(id: string) {
-    setWorkouts(prev => prev.filter(w => w.id !== id));
-  }
-  function startEdit(id: string) { setEditingId(id); }
-  function cancelEdit() { setEditingId(null); }
-  function saveEdit(id: string, patch: Partial<WorkoutEntry>) {
-    setWorkouts(prev => prev.map(w => (w.id === id ? { ...w, ...patch } : w)));
-    setEditingId(null);
-  }
 
   // Export / Import
   function exportJSON() {
@@ -717,124 +709,12 @@ export default function DancerSplitTracker() {
               </CardContent>
             </Card>
 
-            <Card className="rounded-2xl shadow-sm">
-              <CardHeader className="pb-3 flex flex-row items-center justify-between">
-                <CardTitle className="text-lg">Workout Log</CardTitle>
-                <div className="flex items-center gap-2 text-sm">
-                  <Label className="mr-1">Sort</Label>
-                  <Select value={sortBy} onValueChange={(v) => setSortBy(v as any)}>
-                    <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="date">Date (newest)</SelectItem>
-                      <SelectItem value="name">Workout name</SelectItem>
-                      <SelectItem value="volume">Volume</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {sortedWorkouts.length === 0 ? (
-                  <div className="text-sm text-slate-500">No workouts logged yet.</div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="text-left text-slate-500 border-b">
-                          <th className="py-2 pr-4">Date</th>
-                          <th className="py-2 pr-4">Exercise</th>
-                          <th className="py-2 pr-4">Sets</th>
-                          <th className="py-2 pr-4">Reps</th>
-                          <th className="py-2 pr-4">Weight ({unit})</th>
-                          <th className="py-2 pr-4">Volume</th>
-                          <th className="py-2 pr-4">Notes</th>
-                          <th className="py-2 pr-4">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sortedWorkouts.map((w) => {
-                          const volumeKg = w.sets * w.reps * (w.weightKg ?? 1);
-                          const weightDisplay = w.weightKg === undefined ? "—" : (Math.round(fromKg(w.weightKg, unit) * 10) / 10).toString();
-                          const isEditing = editingId === w.id;
-                          return (
-                            <tr key={w.id} className="border-b last:border-0">
-                              <td className="py-2 pr-4 whitespace-nowrap">
-                                {isEditing ? (
-                                  <Input type="date" defaultValue={w.date} onChange={(e) => (w.date = e.target.value)} />
-                                ) : (
-                                  w.date
-                                )}
-                              </td>
-                              <td className="py-2 pr-4">
-                                {isEditing ? (
-                                  <Input defaultValue={w.name} onChange={(e) => (w.name = e.target.value)} />
-                                ) : (
-                                  w.name
-                                )}
-                              </td>
-                              <td className="py-2 pr-4">
-                                {isEditing ? (
-                                  <Input inputMode="numeric" defaultValue={String(w.sets)} onChange={(e) => (w.sets = Number(e.target.value))} />
-                                ) : (
-                                  w.sets
-                                )}
-                              </td>
-                              <td className="py-2 pr-4">
-                                {isEditing ? (
-                                  <Input inputMode="numeric" defaultValue={String(w.reps)} onChange={(e) => (w.reps = Number(e.target.value))} />
-                                ) : (
-                                  w.reps
-                                )}
-                              </td>
-                              <td className="py-2 pr-4">
-                                {isEditing ? (
-                                  <Input
-                                    inputMode="numeric"
-                                    defaultValue={w.weightKg === undefined ? "" : String(Math.round(fromKg(w.weightKg, unit) * 10) / 10)}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      if (val === "") w.weightKg = undefined;
-                                      else {
-                                        const num = Number(val);
-                                        if (Number.isFinite(num) && num >= 0) w.weightKg = Math.round(toKg(num, unit) * 100) / 100;
-                                      }
-                                    }}
-                                  />
-                                ) : (
-                                  weightDisplay
-                                )}
-                              </td>
-                              <td className="py-2 pr-4">{unit === "kg" ? Math.round(volumeKg) : Math.round(fromKg(volumeKg, unit))}</td>
-                              <td className="py-2 pr-4 max-w-[260px] truncate" title={w.notes ?? ""}>
-                                {isEditing ? (
-                                  <Input defaultValue={w.notes ?? ""} onChange={(e) => (w.notes = (e.target as any).value)} />
-                                ) : (
-                                  w.notes ?? "—"
-                                )}
-                              </td>
-                              <td className="py-2 pr-4 flex items-center gap-1">
-                                {isEditing ? (
-                                  <>
-                                    <Button size="icon" className="rounded-xl" onClick={() => saveEdit(w.id, { ...w })}><Save className="h-4 w-4" /></Button>
-                                    <Button variant="ghost" size="icon" className="rounded-xl" onClick={cancelEdit}><X className="h-4 w-4" /></Button>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Button variant="ghost" size="icon" className="rounded-xl" onClick={() => startEdit(w.id)}><Edit3 className="h-4 w-4" /></Button>
-                                    <Button variant="ghost" size="icon" className="hover:bg-rose-50 hover:text-rose-600 rounded-xl" onClick={() => removeWorkout(w.id)}>
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
-                                  </>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <WorkoutLogTable
+              workouts={workouts}
+              unit={unit}
+              onChange={setWorkouts}
+            />
+
           </TabsContent>
         </Tabs>
 
