@@ -3,6 +3,7 @@ import ProfileTab from "@/components/ProfileTab";
 import PlanTab from "@/components/PlanTab";
 import WorkoutLogTable from "@/components/WorkoutLogTable";
 import { markPRsBeforeInsert } from "@/lib/pr";
+import { EXERCISES } from "@/lib/exercises";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
@@ -86,6 +87,7 @@ interface UserProfile {
   programDurationWeeks?: number | "";
   daysPerWeek?: number | "";
   preferredDays?: string[]; // Mon..Sun
+  programStartDate?: string; // YYYY-MM-DD
 }
 
 interface WorkoutEntry {
@@ -230,9 +232,10 @@ export default function DancerSplitTracker() {
     goal: "",
     unit: "kg",
     programName: "Final 4-Day Dancer's Split",
-    programDurationWeeks: 8,
+    programDurationWeeks: 12,
     daysPerWeek: 4,
     preferredDays: ["Mon", "Tue", "Thu", "Sat"],
+    programStartDate: new Date().toISOString().slice(0,10),
   });
 
   // Workouts
@@ -302,6 +305,12 @@ export default function DancerSplitTracker() {
     }
     return Array.from(map.values()).sort((a, b) => (a.date < b.date ? -1 : 1));
   }, [workouts, exerciseFilter]);
+  // Completed dates for the calendar (any date present in workouts)
+  const completedDates = React.useMemo(() => {
+    const s = new Set<string>();
+    for (const w of workouts) s.add(w.date);
+    return s;
+  }, [workouts]);
 
 /*   const sortedWorkouts = useMemo(() => {
     const copy = [...workouts];
@@ -484,7 +493,22 @@ export default function DancerSplitTracker() {
               plan={dancerSplit}
               activePlanDay={activePlanDay}
               onChangeActivePlanDay={setActivePlanDay}
-              onStartSession={(day) => { startSession(day); setActiveTopTab("track"); }}
+              onStartSession={(day) => {
+                startSession(day);
+                setActiveTopTab("track");
+              }}
+
+              /* Calendar props */
+              preferredDays={(profile.preferredDays as any) || []}
+              programStartDate={profile.programStartDate}
+              daysPerWeek={profile.daysPerWeek as any}
+              completedDates={completedDates}
+              onPickDate={(isoDate, suggestedPlanDay) => {
+                // Set the session date from the calendar and jump straight to Track
+                setSessionDate(isoDate);
+                startSession(suggestedPlanDay);
+                setActiveTopTab("track");
+              }}
             />
           </TabsContent>
 
@@ -644,7 +668,22 @@ export default function DancerSplitTracker() {
                     </div>
                     <div className="md:col-span-2">
                       <Label htmlFor="wname">Exercise</Label>
-                      <Input id="wname" placeholder="e.g., Bulgarian Split Squat" value={wName} onChange={(e) => setWName(e.target.value)} />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <Select onValueChange={(v) => setWName(v)}>
+                          <SelectTrigger><SelectValue placeholder="Pick from library…" /></SelectTrigger>
+                          <SelectContent className="max-h-72">
+                            {EXERCISES.map((ex) => (
+                              <SelectItem key={ex} value={ex}>{ex}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Input
+                          id="wname"
+                          placeholder="…or type a custom exercise"
+                          value={wName}
+                          onChange={(e) => setWName(e.target.value)}
+                        />
+                      </div>
                     </div>
                     <div>
                       <Label htmlFor="sets">Sets</Label>

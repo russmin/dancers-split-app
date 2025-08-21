@@ -19,6 +19,7 @@ export interface ProfileShape {
   programDurationWeeks?: number | "";
   daysPerWeek?: number | "";
   preferredDays?: string[];
+  programStartDate?: string; // YYYY-MM-DD
 }
 
 interface Props {
@@ -161,6 +162,16 @@ export default function ProfileTab({
                 value={profile.daysPerWeek as any}
                 onChange={(e) => onChange("daysPerWeek" as any, e.target.value === "" ? "" : Number(e.target.value))} />
             </div>
+            <div>
+            <Label htmlFor="programStart">Program Start Date</Label>
+            <Input
+              id="programStart"
+              type="date"
+              value={(profile.programStartDate as any) || ""}
+              onChange={(e) => onChange("programStartDate" as any, e.target.value)}
+            />
+          </div>
+
             <div>
               <Label>&nbsp;</Label>
               <div className="text-xs text-slate-500">Choose preferred days below</div>

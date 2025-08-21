@@ -1,19 +1,37 @@
 import React from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import PlanCalendar from "@/components/PlanCalendar";
 
 export interface PlanDay {
   day: number;
   title: string;
-  exercises: ReadonlyArray<string>; // readonly-friendly
+  exercises: ReadonlyArray<string>;
 }
 
 interface Props {
-  plan: ReadonlyArray<PlanDay>;      //  readonly-friendly
+  plan: ReadonlyArray<PlanDay>;
   activePlanDay: string;
   onChangeActivePlanDay: (v: string) => void;
   onStartSession: (day: number) => void;
+
+  // calendar props
+  preferredDays: Array<"Sun"|"Mon"|"Tue"|"Wed"|"Thu"|"Fri"|"Sat">;
+  programStartDate?: string;
+  daysPerWeek?: number;
+  completedDates: Set<string>;
+  onPickDate: (isoDate: string, suggestedPlanDay: number) => void;
 }
 
 export default function PlanTab({
@@ -21,41 +39,76 @@ export default function PlanTab({
   activePlanDay,
   onChangeActivePlanDay,
   onStartSession,
+  preferredDays,
+  programStartDate,
+  daysPerWeek,
+  completedDates,
+  onPickDate,
 }: Props) {
-  return (
-    <Card className="rounded-2xl shadow-sm">
-      <CardHeader>
-        <CardTitle className="text-lg">The Final 4-Day Dancer&apos;s Split (&lt;70 mins/session)</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <Tabs value={activePlanDay} onValueChange={onChangeActivePlanDay} className="w-full">
-          <TabsList className="grid grid-cols-4 w-full mb-3">
-            {plan.map((d) => (
-              <TabsTrigger key={d.day} value={String(d.day)}>Day {d.day}</TabsTrigger>
-            ))}
-          </TabsList>
+  const [month, setMonth] = React.useState(new Date());
 
-          {plan.map((d) => (
-            <TabsContent key={d.day} value={String(d.day)}>
-              <div className="flex items-center justify-between mb-3">
-                <div className="text-sm text-slate-600">{d.title}</div>
-                <Button className="rounded-xl" onClick={() => onStartSession(d.day)}>Start Session</Button>
-              </div>
-              <ul className="list-disc pl-6 space-y-2">
-                {d.exercises.map((ex, i) => {
-                  const [namePart, restPart] = ex.split(":");
-                  return (
-                    <li key={i}>
-                      <span className="font-medium">{namePart}:</span>
-                      {restPart ? ` ${restPart}` : ""}
-                    </li>
-                  );
-                })}
-              </ul>
-            </TabsContent>
-          ))}
-        </Tabs>
-      </CardContent>
-    </Card>
+  return (
+    <div className="space-y-6">
+      {/* Calendar */}
+      <PlanCalendar
+        month={month}
+        onMonthChange={setMonth}
+        planLengthDays={plan.length}
+        preferredDays={preferredDays}
+        programStartDate={programStartDate}
+        daysPerWeek={daysPerWeek}
+        completedDates={completedDates}
+        onPickDate={onPickDate}
+      />
+
+      {/* Plan tabs */}
+      <Card className="rounded-2xl shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-lg">Plan Details</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Tabs
+            value={activePlanDay}
+            onValueChange={onChangeActivePlanDay}
+            className="w-full"
+          >
+            <TabsList className="grid grid-cols-4 gap-2 mb-4">
+              {plan.map((d) => (
+                <TabsTrigger
+                  key={d.day}
+                  value={d.day.toString()}
+                  className="rounded-lg"
+                >
+                  Day {d.day}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+
+            {plan.map((d) => (
+              <TabsContent key={d.day} value={d.day.toString()}>
+                <Card className="rounded-xl">
+                  <CardHeader>
+                    <CardTitle>{d.title}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ul className="list-disc list-inside mb-4">
+                      {d.exercises.map((ex, i) => (
+                        <li key={i}>{ex}</li>
+                      ))}
+                    </ul>
+                    <Button
+                      onClick={() => onStartSession(d.day)}
+                      className="rounded-lg"
+                    >
+                      Start Session
+                    </Button>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            ))}
+          </Tabs>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
