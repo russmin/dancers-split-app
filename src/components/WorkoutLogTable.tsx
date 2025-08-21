@@ -6,6 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Edit3, Save, X, Trash2 } from "lucide-react";
 
+const Badge = ({ children }: { children: React.ReactNode }) => (
+  <span className="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium text-emerald-700 border-emerald-200 bg-emerald-50">
+    {children}
+  </span>
+);
+
 export interface WorkoutEntry {
   id: string;
   date: string;      // YYYY-MM-DD
@@ -14,6 +20,8 @@ export interface WorkoutEntry {
   reps: number;      // per-set reps or seconds if timed entry "(sec)"
   weightKg?: number; // always stored in kg
   notes?: string;
+  isPRMaxWeight?: boolean;
+  isPRVolume?: boolean;
 }
 
 type SortBy = "date" | "name" | "volume";
@@ -143,16 +151,11 @@ export default function WorkoutLogTable({ workouts, unit, onChange }: Props) {
                         )}
                       </td>
                       <td className="py-2 pr-4">
-                        {isEditing ? (
-                          <Input
-                            value={draft.name}
-                            onChange={(e) =>
-                              setEditDrafts(d => ({ ...d, [w.id]: { ...draft, name: e.target.value } }))
-                            }
-                          />
-                        ) : (
-                          w.name
-                        )}
+                        {w.name}
+                        <span className="ml-2 space-x-1">
+                          {w.isPRMaxWeight && <Badge>PR (Max Wt)</Badge>}
+                          {w.isPRVolume && <Badge>PR (Volume)</Badge>}
+                        </span>
                       </td>
                       <td className="py-2 pr-4">
                         {isEditing ? (

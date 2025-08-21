@@ -356,7 +356,8 @@ export default function DancerSplitTracker() {
       });
     }
     if (entries.length === 0) return setSessionActive(false);
-    setWorkouts(prev => [...entries, ...prev]);
+    const withPR = markPRsBeforeInsert(workouts, entries);
+    setWorkouts(prev => [...withPR, ...prev]);
     setSessionActive(false);
   }
 
@@ -401,7 +402,9 @@ export default function DancerSplitTracker() {
       weightKg: rawWeight === undefined ? undefined : Math.round(toKg(rawWeight, unit) * 100) / 100,
       notes: wNotes.trim() || undefined,
     };
-    setWorkouts(prev => [entry, ...prev]);
+    const withPR = markPRsBeforeInsert(workouts, [entry]);
+    setWorkouts(prev => [...withPR, ...prev]);
+
     if (!fromPlan) setWName("");
   }
 
