@@ -17,8 +17,6 @@ import { Upload, Download, PlusCircle, BarChart3, User } from "lucide-react";
 import CircuitRunner, { type CircuitSpec } from "@/components/CircuitRunner";
 
 type SessionMode = "sets" | "circuit";
-const [sessionMode, setSessionMode] = useState<SessionMode>("sets");
-const [circuitSpec, setCircuitSpec] = useState<CircuitSpec | null>(null);
 
 
 /* --------------------------------------------
@@ -286,6 +284,9 @@ export default function DancerSplitTracker() {
   const [sessionIdx, setSessionIdx] = useState(0);             // which exercise
   const [currentSetIdx, setCurrentSetIdx] = useState(0);       // which set in exercise
   const [restStartSignal, setRestStartSignal] = useState(0);   // bump to auto-start rest timer
+  const [sessionMode, setSessionMode] = useState<SessionMode>("sets");
+  const [circuitSpec, setCircuitSpec] = useState<CircuitSpec | null>(null);
+
 
   const [sessionPlan, setSessionPlan] = useState<{
     name: string;
@@ -635,257 +636,78 @@ export default function DancerSplitTracker() {
           <TabsContent value="track">
             <div className="space-y-6">
               {/* Session runner */}
-              {sessionActive ? (
-                sessionMode === "circuit" && circuitSpec ? (
-                  /* ---------- CIRCUIT MODE ---------- */
-                  <Card className="rounded-2xl shadow-sm">
-                    <CardHeader>
-                      <CardTitle className="text-lg">
-                        Session — Day {sessionDay}
-                        <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4 text-sm">
-                      <div>
-                        <Label htmlFor="sdate">Session date</Label>
-                        <Input
-                          id="sdate"
-                          type="date"
-                          value={sessionDate}
-                          onChange={(e) => setSessionDate(e.target.value)}
-                        />
-                      </div>
-
-                      <CircuitRunner
-                        spec={circuitSpec}
-                        onComplete={() => finishCircuitAndSave(circuitSpec)}
+              {sessionMode === "circuit" && circuitSpec ? (
+                <Card className="rounded-2xl shadow-sm">
+                  <CardHeader>
+                    <CardTitle className="text-lg">
+                      Session — Day {sessionDay}
+                      <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4 text-sm">
+                    <div>
+                      <Label htmlFor="sdate">Session date</Label>
+                      <Input
+                        id="sdate"
+                        type="date"
+                        value={sessionDate}
+                        onChange={(e) => setSessionDate(e.target.value)}
                       />
+                    </div>
 
-                      <div className="flex items-center justify-between">
-                        <Button
-                          variant="outline"
-                          className="rounded-xl"
-                          onClick={() => {
-                            setSessionActive(false);
-                            setCircuitSpec(null);
-                            setSessionMode("sets");
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          className="rounded-xl"
-                          onClick={() => finishCircuitAndSave(circuitSpec)}
-                        >
-                          Finish & Save Now
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  /* ---------- SETS / REPS MODE ---------- */
-                  <Card className="rounded-2xl shadow-sm">
-                    <CardHeader>
-                      <CardTitle className="text-lg">
-                        Session — Day {sessionDay}
-                        <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4 text-sm">
-                      <div>
-                        <Label htmlFor="sdate">Session date</Label>
-                        <Input
-                          id="sdate"
-                          type="date"
-                          value={sessionDate}
-                          onChange={(e) => setSessionDate(e.target.value)}
-                        />
-                      </div>
+                    <CircuitRunner
+                      circuit={circuitSpec}
+                      dateISO={sessionDate}
+                      uid={uid}
+                      onFinish={(entries) => {
+                        const withPR = markPRsBeforeInsert(workouts, entries);
+                        setWorkouts((prev) => [...withPR, ...prev]);
+                        setSessionActive(false);
+                        setSessionMode("sets");
+                        setCircuitSpec(null);
+                      }}
+                    />
 
-                      <div className="flex items-center justify-between">
-                        <div className="font-medium">
-                          {sessionPlan[sessionIdx]?.name ?? ""}
-                        </div>
-                        <div className="space-x-2">
-                          <Button
-                            variant="outline"
-                            className="rounded-xl"
-                            onClick={() => {
-                              setSessionIdx((i) => Math.max(0, i - 1));
-                              setCurrentSetIdx(0);
-                            }}
-                          >
-                            Prev
-                          </Button>
-                          <Button
-                            variant="outline"
-                            className="rounded-xl"
-                            onClick={() => {
-                              setSessionIdx((i) =>
-                                Math.min(sessionPlan.length - 1, i + 1)
-                              );
-                              setCurrentSetIdx(0);
-                            }}
-                          >
-                            Next
-                          </Button>
-                        </div>
-                      </div>
-
-                      {/* Suggested rest + timer */}
-                      {typeof sessionPlan[sessionIdx]?.restSec === "number" && (
-                        <div className="flex items-center justify-between rounded-lg bg-slate-50 border p-3">
-                          <div className="text-xs text-slate-600">
-                            Suggested rest: {sessionPlan[sessionIdx]!.restSec}s
-                          </div>
-                          <RestTimer
-                            seconds={sessionPlan[sessionIdx]!.restSec}
-                            startSignal={restStartSignal}
-                            onDone={() => {
-                              if (!sessionPlan[sessionIdx]?.timed) {
-                                const sets = sessionPlan[sessionIdx]!.sets;
-                                if (currentSetIdx < sets.length - 1) {
-                                  setCurrentSetIdx((i) => i + 1);
-                                } else if (sessionIdx < sessionPlan.length - 1) {
-                                  setSessionIdx((i) => i + 1);
-                                  setCurrentSetIdx(0);
-                                } else {
-                                  finishSessionAndSave();
-                                }
-                              }
-                            }}
-                          />
-                        </div>
-                      )}
-
-                      {/* Timed vs sets table */}
-                      {sessionPlan[sessionIdx]?.timed ? (
-                        <div className="grid grid-cols-3 gap-3 max-w-md">
-                          <div>
-                            <Label>Seconds</Label>
-                            <Input
-                              inputMode="numeric"
-                              value={sessionPlan[sessionIdx].seconds as any}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setSessionPlan((prev) =>
-                                  prev.map((ex, i) =>
-                                    i === sessionIdx
-                                      ? { ...ex, seconds: v === "" ? "" : Number(v) }
-                                      : ex
-                                  )
-                                );
-                              }}
-                            />
-                          </div>
-                          <div className="col-span-2 self-end text-slate-500">
-                            (timed movement)
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="overflow-x-auto">
-                          <table className="min-w-[420px] text-sm">
-                            <thead>
-                              <tr className="text-left text-slate-500 border-b">
-                                <th className="py-2 pr-4">Set</th>
-                                <th className="py-2 pr-4">Reps</th>
-                                <th className="py-2 pr-4">Weight ({unit})</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {sessionPlan[sessionIdx]?.sets.map((s, j) => (
-                                <tr
-                                  key={j}
-                                  className={`border-b last:border-0 ${
-                                    j === currentSetIdx ? "bg-slate-50" : ""
-                                  }`}
-                                >
-                                  <td className="py-2 pr-4">{j + 1}</td>
-                                  <td className="py-2 pr-4">
-                                    <Input
-                                      inputMode="numeric"
-                                      value={String(s.reps)}
-                                      onChange={(e) =>
-                                        updateSet(sessionIdx, j, "reps", e.target.value)
-                                      }
-                                    />
-                                  </td>
-                                  <td className="py-2 pr-4">
-                                    <Input
-                                      inputMode="numeric"
-                                      value={s.weight === "" ? "" : String(s.weight)}
-                                      onChange={(e) =>
-                                        updateSet(
-                                          sessionIdx,
-                                          j,
-                                          "weight",
-                                          e.target.value
-                                        )
-                                      }
-                                      placeholder={unit === "kg" ? "40" : "90"}
-                                    />
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                      {/* Complete Set button (for non-timed) */}
-                      {!sessionPlan[sessionIdx]?.timed && (
-                        <div className="flex items-center justify-end">
-                          <Button
-                            className="rounded-xl"
-                            onClick={() => {
-                              const rest = sessionPlan[sessionIdx]?.restSec ?? 0;
-                              if (rest > 0) {
-                                setRestStartSignal((n) => n + 1); // kick off timer; onDone advances
-                              } else {
-                                const sets = sessionPlan[sessionIdx]!.sets;
-                                if (currentSetIdx < sets.length - 1) {
-                                  setCurrentSetIdx((i) => i + 1);
-                                } else if (sessionIdx < sessionPlan.length - 1) {
-                                  setSessionIdx((i) => i + 1);
-                                  setCurrentSetIdx(0);
-                                } else {
-                                  finishSessionAndSave();
-                                }
-                              }
-                            }}
-                          >
-                            Complete Set →
-                          </Button>
-                        </div>
-                      )}
-
-                      <div className="flex items-center justify-between">
-                        <Button
-                          variant="outline"
-                          className="rounded-xl"
-                          onClick={() => setSessionActive(false)}
-                        >
-                          Cancel
-                        </Button>
-                        {sessionIdx === sessionPlan.length - 1 ? (
-                          <Button className="rounded-xl" onClick={finishSessionAndSave}>
-                            Finish Session & Save
-                          </Button>
-                        ) : (
-                          <Button
-                            className="rounded-xl"
-                            onClick={() => {
-                              setSessionIdx((i) => Math.min(sessionPlan.length - 1, i + 1));
-                              setCurrentSetIdx(0);
-                            }}
-                          >
-                            Complete Exercise →
-                          </Button>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                )
+                    <div className="flex items-center justify-between">
+                      <Button
+                        variant="outline"
+                        className="rounded-xl"
+                        onClick={() => {
+                          setSessionActive(false);
+                          setCircuitSpec(null);
+                          setSessionMode("sets");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        className="rounded-xl"
+                        onClick={() => {
+                          // If you want a manual finish, call onFinish with generated entries:
+                          const auto = [];
+                          for (let r = 1; r <= circuitSpec.rounds; r++) {
+                            for (const st of circuitSpec.stations) {
+                              auto.push({
+                                id: uid(),
+                                date: sessionDate,
+                                name: `${st.label} (sec)`,
+                                sets: 1,
+                                reps: st.seconds,
+                              });
+                            }
+                          }
+                          const withPR = markPRsBeforeInsert(workouts, auto);
+                          setWorkouts((prev) => [...withPR, ...prev]);
+                          setSessionActive(false);
+                          setSessionMode("sets");
+                          setCircuitSpec(null);
+                        }}
+                      >
+                        Finish & Save Now
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
               ) : (
                 /* ---------- START A SESSION ---------- */
                 <Card className="rounded-2xl shadow-sm">
