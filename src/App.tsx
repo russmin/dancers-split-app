@@ -14,6 +14,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, Download, PlusCircle, BarChart3, User } from "lucide-react";
+import CircuitRunner, { type CircuitSpec } from "@/components/CircuitRunner";
+
+type SessionMode = "sets" | "circuit";
+const [sessionMode, setSessionMode] = useState<SessionMode>("sets");
+const [circuitSpec, setCircuitSpec] = useState<CircuitSpec | null>(null);
+
 
 /* --------------------------------------------
    Plan Data (Final 4-Day Dancer's Split)
@@ -54,7 +60,7 @@ const dancerSplit = [
       "Box Jumps / Broad Jumps: 45s",
       "Push-Ups: 45s",
       "Single-Leg RDL (Bodyweight): 45s/leg",
-      "Cable Woodchoppers (High to Low): 12 reps/side",
+      "Bird Dog Crunch 10-12 reps/side",
       "Plank: 60s hold",
     ],
   },
@@ -142,6 +148,25 @@ function extractRestSeconds(source: string): number | undefined {
 
   return undefined;
 }
+function day3ToCircuit(): CircuitSpec {
+  // You can tweak durations here
+  const base = [
+    { label: "Kettlebell Swings", seconds: 45 },
+    { label: "Box/Broad Jumps", seconds: 45 },
+    { label: "Push-Ups", seconds: 45 },
+    { label: "Single-Leg RDL (BW)", seconds: 45 }, // per leg is tricky; keep per-leg as separate stations if desired
+    { label: "Bird Dog Crunch", seconds: 45 }, // or fixed reps; we choose 45s timed for circuit consistency
+    { label: "Plank", seconds: 60 },
+  ];
+  return {
+    mode: "circuit",
+    name: "Full-Body Circuit",
+    rounds: 3,
+    stationRestSec: 30,     // rest between stations
+    roundRestSec: 60,       // rest between rounds (optional)
+    stations: base,
+  };
+}
 
 function parseSetsAndReps(ex: string) {
   const head = ex.split("(")[0]; // ignore parenthetical notes like (90s rest)
@@ -173,6 +198,9 @@ function RestTimer({
 }) {
   const [remaining, setRemaining] = React.useState<number>(seconds);
   const [running, setRunning] = React.useState<boolean>(false);
+  const [workStartSignal, setWorkStartSignal] = useState(0); // for timed "work" countdown
+  const [wType, setWType] = useState<"standard" | "timed">("standard"); // manual log type
+  const [wSeconds, setWSeconds] = useState<string>(""); // manual log seconds (when timed)
 
   React.useEffect(() => {
     setRemaining(seconds);
@@ -248,6 +276,8 @@ export default function DancerSplitTracker() {
   const [wReps, setWReps] = useState<string>("10");
   const [wWeight, setWWeight] = useState<string>("");
   const [wNotes, setWNotes] = useState<string>("");
+  const [wType, setWType] = useState<"sets" | "timed">("sets");
+  const [wSeconds, setWSeconds] = useState<string>("");
 
   // Session runner
   const [sessionActive, setSessionActive] = useState(false);
@@ -329,8 +359,21 @@ export default function DancerSplitTracker() {
 
   // Plan/session helpers
   function startSession(day: number) {
+    // Day 3 → Circuit mode
+    if (day === 3) {
+      const spec = day3ToCircuit();
+      setCircuitSpec(spec);
+      setSessionMode("circuit");
+      setSessionActive(true);
+      setSessionDay(day);
+      // keep the session date as-is
+      return;
+    }
+
+    // Other days → Sets/Reps mode
     const d = dancerSplit.find(x => x.day === day);
     if (!d) return;
+
     const plan = d.exercises
       .filter(s => !/^Format:/i.test(s))
       .map(s => {
@@ -340,16 +383,22 @@ export default function DancerSplitTracker() {
         if (parsed.timed) {
           return { name, timed: true, seconds: parsed.seconds, restSec, sets: [{ reps: "", weight: "" }] };
         }
-        const setsArr = Array.from({ length: parsed.sets }, () => ({ reps: parsed.reps as number, weight: "" as number | "" }));
+        const setsArr = Array.from(
+          { length: parsed.sets },
+          () => ({ reps: parsed.reps as number, weight: "" as number | "" })
+        );
         return { name, sets: setsArr, restSec };
       });
+
     setSessionPlan(plan as any);
     setSessionIdx(0);
     setCurrentSetIdx(0);
     setSessionDay(day);
+    setSessionMode("sets");
     setSessionActive(true);
     setActiveTopTab("track");
   }
+
 
   function finishSessionAndSave() {
     const entries: WorkoutEntry[] = [];
@@ -368,6 +417,28 @@ export default function DancerSplitTracker() {
     const withPR = markPRsBeforeInsert(workouts, entries);
     setWorkouts(prev => [...withPR, ...prev]);
     setSessionActive(false);
+  }
+  function finishCircuitAndSave(spec: CircuitSpec) {
+    // Log each station per round as a timed entry (seconds in reps)
+    const entries: WorkoutEntry[] = [];
+    for (let r = 1; r <= spec.rounds; r++) {
+      for (const st of spec.stations) {
+        entries.push({
+          id: uid(),
+          date: sessionDate,
+          name: `${st.label} (sec)`,
+          sets: 1,
+          reps: st.seconds,
+          weightKg: undefined,
+        });
+      }
+    }
+    if (entries.length === 0) { setSessionActive(false); return; }
+    const withPR = markPRsBeforeInsert(workouts, entries);
+    setWorkouts(prev => [...withPR, ...prev]);
+    setSessionActive(false);
+    setSessionMode("sets");
+    setCircuitSpec(null);
   }
 
   function updateSet(exIdx: number, setIdx: number, field: "reps" | "weight", value: string) {
@@ -395,6 +466,53 @@ export default function DancerSplitTracker() {
   function addWorkout(fromPlan?: { name: string }) {
     const name = fromPlan?.name ?? wName;
     if (!name.trim()) return alert("Please enter a workout name.");
+
+    if (wType === "timed") {
+      const seconds = Number(wSeconds);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        return alert("Seconds must be a positive number.");
+      }
+      const entry: WorkoutEntry = {
+        id: uid(),
+        date: wDate,
+        name: `${name.trim()} (sec)`,
+        sets: 1,
+        reps: seconds,         // store time as reps=seconds for charts/volume
+        weightKg: undefined,
+        notes: wNotes.trim() || undefined,
+      };
+      const withPR = markPRsBeforeInsert(workouts, [entry]);
+      setWorkouts(prev => [...withPR, ...prev]);
+      if (!fromPlan) {
+        setWName("");
+        setWSeconds("");
+      }
+      return;
+    }
+  function addTimedWorkout(nameFromUI?: string, secondsFromUI?: string) {
+    const name = (nameFromUI ?? wName).trim();
+    const secs = Number(secondsFromUI ?? wSeconds);
+
+    if (!name) return alert("Please enter an exercise name.");
+    if (!Number.isFinite(secs) || secs <= 0) return alert("Duration must be a positive number (seconds).");
+
+    const entry: WorkoutEntry = {
+      id: uid(),
+      date: wDate,
+      name: name + " (sec)",  // keeps timed entries distinct
+      sets: 1,
+      reps: secs,             // store seconds in reps field
+      weightKg: undefined,
+      notes: wNotes.trim() || undefined,
+    };
+
+    const withPR = markPRsBeforeInsert(workouts, [entry]);
+    setWorkouts(prev => [...withPR, ...prev]);
+    setWSeconds("");
+    if (!nameFromUI) setWName("");
+}
+
+    // standard sets x reps x (optional) weight
     const sets = Number(wSets);
     const reps = Number(wReps);
     const rawWeight = wWeight === "" ? undefined : Number(wWeight);
@@ -416,7 +534,6 @@ export default function DancerSplitTracker() {
 
     if (!fromPlan) setWName("");
   }
-
 
   // Export / Import
   function exportJSON() {
@@ -514,201 +631,308 @@ export default function DancerSplitTracker() {
 
 
           {/* TRACK TAB (session runner + manual) */}
+
           <TabsContent value="track">
             <div className="space-y-6">
               {/* Session runner */}
               {sessionActive ? (
-                <Card className="rounded-2xl shadow-sm">
-                  <CardHeader><CardTitle className="text-lg">Session — Day {sessionDay}
-                    <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
-                  </CardTitle></CardHeader>
-                  <CardContent className="space-y-4 text-sm">
-                    <div>
-                      <Label htmlFor="sdate">Session date</Label>
-                      <Input id="sdate" type="date" value={sessionDate} onChange={(e) => setSessionDate(e.target.value)} />
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <div className="font-medium">{sessionPlan[sessionIdx]?.name ?? ""}</div>
-                      <div className="space-x-2">
-                        <Button variant="outline" className="rounded-xl" onClick={() => { setSessionIdx((i) => Math.max(0, i-1)); setCurrentSetIdx(0); }}>Prev</Button>
-                        <Button variant="outline" className="rounded-xl" onClick={() => { setSessionIdx((i) => Math.min(sessionPlan.length-1, i+1)); setCurrentSetIdx(0); }}>Next</Button>
-                      </div>
-                    </div>
-
-                    {/* Suggested rest + timer */}
-                    {typeof sessionPlan[sessionIdx]?.restSec === "number" && (
-                      <div className="flex items-center justify-between rounded-lg bg-slate-50 border p-3">
-                        <div className="text-xs text-slate-600">
-                          Suggested rest: {sessionPlan[sessionIdx]!.restSec}s
-                        </div>
-                        <RestTimer
-                          seconds={sessionPlan[sessionIdx]!.restSec}
-                          startSignal={restStartSignal}
-                          onDone={() => {
-                            if (!sessionPlan[sessionIdx]?.timed) {
-                              const sets = sessionPlan[sessionIdx]!.sets;
-                              if (currentSetIdx < sets.length - 1) {
-                                setCurrentSetIdx(i => i + 1);
-                              } else if (sessionIdx < sessionPlan.length - 1) {
-                                setSessionIdx(i => i + 1);
-                                setCurrentSetIdx(0);
-                              } else {
-                                finishSessionAndSave();
-                              }
-                            }
-                          }}
+                sessionMode === "circuit" && circuitSpec ? (
+                  /* ---------- CIRCUIT MODE ---------- */
+                  <Card className="rounded-2xl shadow-sm">
+                    <CardHeader>
+                      <CardTitle className="text-lg">
+                        Session — Day {sessionDay}
+                        <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4 text-sm">
+                      <div>
+                        <Label htmlFor="sdate">Session date</Label>
+                        <Input
+                          id="sdate"
+                          type="date"
+                          value={sessionDate}
+                          onChange={(e) => setSessionDate(e.target.value)}
                         />
                       </div>
-                    )}
 
-                    {/* Timed vs sets table */}
-                    {sessionPlan[sessionIdx]?.timed ? (
-                      <div className="grid grid-cols-3 gap-3 max-w-md">
-                        <div>
-                          <Label>Seconds</Label>
-                          <Input inputMode="numeric" value={sessionPlan[sessionIdx].seconds as any} onChange={(e) => {
-                            const v = e.target.value; setSessionPlan(prev => prev.map((ex, i) => i===sessionIdx ? { ...ex, seconds: v === "" ? "" : Number(v) } : ex));
-                          }} />
-                        </div>
-                        <div className="col-span-2 self-end text-slate-500">(timed movement)</div>
-                      </div>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="min-w-[420px] text-sm">
-                          <thead>
-                            <tr className="text-left text-slate-500 border-b">
-                              <th className="py-2 pr-4">Set</th>
-                              <th className="py-2 pr-4">Reps</th>
-                              <th className="py-2 pr-4">Weight ({unit})</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {sessionPlan[sessionIdx]?.sets.map((s, j) => (
-                              <tr key={j} className={`border-b last:border-0 ${j === currentSetIdx ? "bg-slate-50" : ""}`}>
-                                <td className="py-2 pr-4">{j+1}</td>
-                                <td className="py-2 pr-4"><Input inputMode="numeric" value={String(s.reps)} onChange={(e) => updateSet(sessionIdx, j, "reps", e.target.value)} /></td>
-                                <td className="py-2 pr-4"><Input inputMode="numeric" value={s.weight === "" ? "" : String(s.weight)} onChange={(e) => updateSet(sessionIdx, j, "weight", e.target.value)} placeholder={unit === "kg" ? "40" : "90"} /></td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                      <CircuitRunner
+                        spec={circuitSpec}
+                        onComplete={() => finishCircuitAndSave(circuitSpec)}
+                      />
 
-                    {/* Complete Set button (for non-timed) */}
-                    {!sessionPlan[sessionIdx]?.timed && (
-                      <div className="flex items-center justify-end">
+                      <div className="flex items-center justify-between">
                         <Button
+                          variant="outline"
                           className="rounded-xl"
                           onClick={() => {
-                            const rest = sessionPlan[sessionIdx]?.restSec ?? 0;
-                            if (rest > 0) {
-                              setRestStartSignal(n => n + 1); // kick off timer; onDone advances
-                            } else {
-                              const sets = sessionPlan[sessionIdx]!.sets;
-                              if (currentSetIdx < sets.length - 1) {
-                                setCurrentSetIdx(i => i + 1);
-                              } else if (sessionIdx < sessionPlan.length - 1) {
-                                setSessionIdx(i => i + 1);
-                                setCurrentSetIdx(0);
-                              } else {
-                                finishSessionAndSave();
-                              }
-                            }
+                            setSessionActive(false);
+                            setCircuitSpec(null);
+                            setSessionMode("sets");
                           }}
                         >
-                          Complete Set →
+                          Cancel
+                        </Button>
+                        <Button
+                          className="rounded-xl"
+                          onClick={() => finishCircuitAndSave(circuitSpec)}
+                        >
+                          Finish & Save Now
                         </Button>
                       </div>
-                    )}
+                    </CardContent>
+                  </Card>
+                ) : (
+                  /* ---------- SETS / REPS MODE ---------- */
+                  <Card className="rounded-2xl shadow-sm">
+                    <CardHeader>
+                      <CardTitle className="text-lg">
+                        Session — Day {sessionDay}
+                        <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4 text-sm">
+                      <div>
+                        <Label htmlFor="sdate">Session date</Label>
+                        <Input
+                          id="sdate"
+                          type="date"
+                          value={sessionDate}
+                          onChange={(e) => setSessionDate(e.target.value)}
+                        />
+                      </div>
 
-                    <div className="flex items-center justify-between">
-                      <Button variant="outline" className="rounded-xl" onClick={() => setSessionActive(false)}>Cancel</Button>
-                      {sessionIdx === sessionPlan.length - 1 ? (
-                        <Button className="rounded-xl" onClick={finishSessionAndSave}>Finish Session & Save</Button>
-                      ) : (
-                        <Button className="rounded-xl" onClick={() => { setSessionIdx(i => Math.min(sessionPlan.length-1, i+1)); setCurrentSetIdx(0); }}>Complete Exercise →</Button>
+                      <div className="flex items-center justify-between">
+                        <div className="font-medium">
+                          {sessionPlan[sessionIdx]?.name ?? ""}
+                        </div>
+                        <div className="space-x-2">
+                          <Button
+                            variant="outline"
+                            className="rounded-xl"
+                            onClick={() => {
+                              setSessionIdx((i) => Math.max(0, i - 1));
+                              setCurrentSetIdx(0);
+                            }}
+                          >
+                            Prev
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="rounded-xl"
+                            onClick={() => {
+                              setSessionIdx((i) =>
+                                Math.min(sessionPlan.length - 1, i + 1)
+                              );
+                              setCurrentSetIdx(0);
+                            }}
+                          >
+                            Next
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Suggested rest + timer */}
+                      {typeof sessionPlan[sessionIdx]?.restSec === "number" && (
+                        <div className="flex items-center justify-between rounded-lg bg-slate-50 border p-3">
+                          <div className="text-xs text-slate-600">
+                            Suggested rest: {sessionPlan[sessionIdx]!.restSec}s
+                          </div>
+                          <RestTimer
+                            seconds={sessionPlan[sessionIdx]!.restSec}
+                            startSignal={restStartSignal}
+                            onDone={() => {
+                              if (!sessionPlan[sessionIdx]?.timed) {
+                                const sets = sessionPlan[sessionIdx]!.sets;
+                                if (currentSetIdx < sets.length - 1) {
+                                  setCurrentSetIdx((i) => i + 1);
+                                } else if (sessionIdx < sessionPlan.length - 1) {
+                                  setSessionIdx((i) => i + 1);
+                                  setCurrentSetIdx(0);
+                                } else {
+                                  finishSessionAndSave();
+                                }
+                              }
+                            }}
+                          />
+                        </div>
                       )}
-                    </div>
-                  </CardContent>
-                </Card>
+
+                      {/* Timed vs sets table */}
+                      {sessionPlan[sessionIdx]?.timed ? (
+                        <div className="grid grid-cols-3 gap-3 max-w-md">
+                          <div>
+                            <Label>Seconds</Label>
+                            <Input
+                              inputMode="numeric"
+                              value={sessionPlan[sessionIdx].seconds as any}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setSessionPlan((prev) =>
+                                  prev.map((ex, i) =>
+                                    i === sessionIdx
+                                      ? { ...ex, seconds: v === "" ? "" : Number(v) }
+                                      : ex
+                                  )
+                                );
+                              }}
+                            />
+                          </div>
+                          <div className="col-span-2 self-end text-slate-500">
+                            (timed movement)
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="min-w-[420px] text-sm">
+                            <thead>
+                              <tr className="text-left text-slate-500 border-b">
+                                <th className="py-2 pr-4">Set</th>
+                                <th className="py-2 pr-4">Reps</th>
+                                <th className="py-2 pr-4">Weight ({unit})</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {sessionPlan[sessionIdx]?.sets.map((s, j) => (
+                                <tr
+                                  key={j}
+                                  className={`border-b last:border-0 ${
+                                    j === currentSetIdx ? "bg-slate-50" : ""
+                                  }`}
+                                >
+                                  <td className="py-2 pr-4">{j + 1}</td>
+                                  <td className="py-2 pr-4">
+                                    <Input
+                                      inputMode="numeric"
+                                      value={String(s.reps)}
+                                      onChange={(e) =>
+                                        updateSet(sessionIdx, j, "reps", e.target.value)
+                                      }
+                                    />
+                                  </td>
+                                  <td className="py-2 pr-4">
+                                    <Input
+                                      inputMode="numeric"
+                                      value={s.weight === "" ? "" : String(s.weight)}
+                                      onChange={(e) =>
+                                        updateSet(
+                                          sessionIdx,
+                                          j,
+                                          "weight",
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder={unit === "kg" ? "40" : "90"}
+                                    />
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Complete Set button (for non-timed) */}
+                      {!sessionPlan[sessionIdx]?.timed && (
+                        <div className="flex items-center justify-end">
+                          <Button
+                            className="rounded-xl"
+                            onClick={() => {
+                              const rest = sessionPlan[sessionIdx]?.restSec ?? 0;
+                              if (rest > 0) {
+                                setRestStartSignal((n) => n + 1); // kick off timer; onDone advances
+                              } else {
+                                const sets = sessionPlan[sessionIdx]!.sets;
+                                if (currentSetIdx < sets.length - 1) {
+                                  setCurrentSetIdx((i) => i + 1);
+                                } else if (sessionIdx < sessionPlan.length - 1) {
+                                  setSessionIdx((i) => i + 1);
+                                  setCurrentSetIdx(0);
+                                } else {
+                                  finishSessionAndSave();
+                                }
+                              }
+                            }}
+                          >
+                            Complete Set →
+                          </Button>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between">
+                        <Button
+                          variant="outline"
+                          className="rounded-xl"
+                          onClick={() => setSessionActive(false)}
+                        >
+                          Cancel
+                        </Button>
+                        {sessionIdx === sessionPlan.length - 1 ? (
+                          <Button className="rounded-xl" onClick={finishSessionAndSave}>
+                            Finish Session & Save
+                          </Button>
+                        ) : (
+                          <Button
+                            className="rounded-xl"
+                            onClick={() => {
+                              setSessionIdx((i) => Math.min(sessionPlan.length - 1, i + 1));
+                              setCurrentSetIdx(0);
+                            }}
+                          >
+                            Complete Exercise →
+                          </Button>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )
               ) : (
+                /* ---------- START A SESSION ---------- */
                 <Card className="rounded-2xl shadow-sm">
-                  <CardHeader><CardTitle className="text-lg">Start a Session</CardTitle></CardHeader>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Start a Session</CardTitle>
+                  </CardHeader>
                   <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
                     <div>
                       <Label>Day</Label>
-                      <Select value={String(sessionDay)} onValueChange={(v) => setSessionDay(Number(v))}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                      <Select
+                        value={String(sessionDay)}
+                        onValueChange={(v) => setSessionDay(Number(v))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
                         <SelectContent>
-                          {dancerSplit.map(d => <SelectItem key={d.day} value={String(d.day)}>Day {d.day}</SelectItem>)}
+                          {dancerSplit.map((d) => (
+                            <SelectItem key={d.day} value={String(d.day)}>
+                              Day {d.day}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
                     <div>
                       <Label>Date</Label>
-                      <Input type="date" value={sessionDate} onChange={(e) => setSessionDate(e.target.value)} />
+                      <Input
+                        type="date"
+                        value={sessionDate}
+                        onChange={(e) => setSessionDate(e.target.value)}
+                      />
                     </div>
                     <div className="md:col-span-2 flex items-end">
-                      <Button className="w-full rounded-xl" onClick={() => startSession(sessionDay)}>Start</Button>
+                      <Button
+                        className="w-full rounded-xl"
+                        onClick={() => startSession(sessionDay)}
+                      >
+                        Start
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>
               )}
-
-              {/* Manual logging */}
-              <Card className="rounded-2xl shadow-sm">
-                <CardHeader><CardTitle className="text-lg flex items-center gap-2"><PlusCircle className="h-5 w-5" /> Manual Log</CardTitle></CardHeader>
-                <CardContent className="text-sm">
-                  <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-                    <div className="md:col-span-2">
-                      <Label htmlFor="date">Date</Label>
-                      <Input id="date" type="date" value={wDate} onChange={(e) => setWDate(e.target.value)} />
-                    </div>
-                    <div className="md:col-span-2">
-                      <Label htmlFor="wname">Exercise</Label>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <Select onValueChange={(v) => setWName(v)}>
-                          <SelectTrigger><SelectValue placeholder="Pick from library…" /></SelectTrigger>
-                          <SelectContent className="max-h-72">
-                            {EXERCISES.map((ex) => (
-                              <SelectItem key={ex} value={ex}>{ex}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Input
-                          id="wname"
-                          placeholder="…or type a custom exercise"
-                          value={wName}
-                          onChange={(e) => setWName(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <Label htmlFor="sets">Sets</Label>
-                      <Input id="sets" inputMode="numeric" value={wSets} onChange={(e) => setWSets(e.target.value)} />
-                    </div>
-                    <div>
-                      <Label htmlFor="reps">Reps</Label>
-                      <Input id="reps" inputMode="numeric" value={wReps} onChange={(e) => setWReps(e.target.value)} />
-                    </div>
-                    <div className="md:col-span-2">
-                      <Label htmlFor="weight">Weight ({unit}) — optional</Label>
-                      <Input id="weight" inputMode="numeric" placeholder={unit === "kg" ? "40" : "90"} value={wWeight} onChange={(e) => setWWeight(e.target.value)} />
-                    </div>
-                    <div className="md:col-span-6">
-                      <Label htmlFor="notes">Notes</Label>
-                      <Input id="notes" placeholder="tempo, partial ROM, cues, RPE…" value={wNotes} onChange={(e) => setWNotes(e.target.value)} />
-                    </div>
-                    <div className="md:col-span-2 flex items-end">
-                      <Button className="w-full rounded-xl" onClick={() => addWorkout()}>Add Workout</Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
             </div>
           </TabsContent>
+
 
           {/* PROGRESS TAB */}
           <TabsContent value="progress">
