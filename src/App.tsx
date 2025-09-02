@@ -286,6 +286,7 @@ export default function DancerSplitTracker() {
   const [restStartSignal, setRestStartSignal] = useState(0);   // bump to auto-start rest timer
   const [sessionMode, setSessionMode] = useState<SessionMode>("sets");
   const [circuitSpec, setCircuitSpec] = useState<CircuitSpec | null>(null);
+  const [isResting, setIsResting] = useState(false);
 
 
   const [sessionPlan, setSessionPlan] = useState<{
@@ -359,17 +360,68 @@ export default function DancerSplitTracker() {
   }, [workouts, sortBy]); */
 
   // Plan/session helpers
-  function startSession(day: number) {
-    // Day 3 → Circuit mode
-    if (day === 3) {
+  function startSession(day: number | string | undefined | null) {
+    const dnum = Number(day);
+    console.log("[startSession] incoming=", day, "coerced=", dnum, "type:", typeof day);
+
+    if (![1, 2, 3, 4].includes(dnum)) {
+      console.warn("[startSession] invalid day, falling back to 1");
+      setSessionActive(false);
+      setSessionMode("sets");
+      setCircuitSpec(null);
+      setSessionPlan([]);
+      // You can remove this alert after confirming
+      alert("That date/day didn’t map to a plan day. Starting Day 1 instead.");
+      return startSession(1);
+    }
+
+    // Day 3 → circuit
+    if (dnum === 3) {
       const spec = day3ToCircuit();
       setCircuitSpec(spec);
       setSessionMode("circuit");
+      setSessionDay(dnum);
       setSessionActive(true);
-      setSessionDay(day);
-      // keep the session date as-is
+      setActiveTopTab("track");
       return;
     }
+
+    // Other days → sets/reps
+    const d = dancerSplit.find(x => x.day === dnum);
+    if (!d) {
+      console.warn("[startSession] no plan for day:", dnum);
+      alert("No plan found for that day. Starting Day 1 instead.");
+      return startSession(1);
+    }
+
+    const plan = d.exercises
+      .filter(s => !/^Format:/i.test(s))
+      .map(s => {
+        const name = s.split(":")[0];
+        const parsed = parseSetsAndReps(s);
+        const restSec = extractRestSeconds(s);
+        if (parsed.timed) {
+          return { name, timed: true as const, seconds: parsed.seconds, restSec, sets: [{ reps: "", weight: "" }] };
+        }
+        const setsArr = Array.from({ length: parsed.sets }, () => ({ reps: parsed.reps as number, weight: "" as number | "" }));
+        return { name, sets: setsArr, restSec };
+      });
+
+    if (plan.length === 0) {
+      console.warn("[startSession] empty plan for day:", dnum);
+      alert("This day has no exercises. Starting Day 1 instead.");
+      return startSession(1);
+    }
+
+    setSessionPlan(plan as any);
+    setSessionIdx(0);
+    setCurrentSetIdx(0);
+    setSessionDay(dnum);
+    setSessionMode("sets");
+    setSessionActive(true);
+    setActiveTopTab("track");
+  }
+
 
     // Other days → Sets/Reps mode
     const d = dancerSplit.find(x => x.day === day);
@@ -612,7 +664,7 @@ export default function DancerSplitTracker() {
               activePlanDay={activePlanDay}
               onChangeActivePlanDay={setActivePlanDay}
               onStartSession={(day) => {
-                startSession(day);
+                startSession(Number(day));
                 setActiveTopTab("track");
               }}
 
@@ -624,7 +676,7 @@ export default function DancerSplitTracker() {
               onPickDate={(isoDate, suggestedPlanDay) => {
                 // Set the session date from the calendar and jump straight to Track
                 setSessionDate(isoDate);
-                startSession(suggestedPlanDay);
+                startSession(suggestedPlanDay ?? 1);
                 setActiveTopTab("track");
               }}
             />
@@ -744,7 +796,11 @@ export default function DancerSplitTracker() {
                     <div className="md:col-span-2 flex items-end">
                       <Button
                         className="w-full rounded-xl"
-                        onClick={() => startSession(sessionDay)}
+                        onClick={() => {
+                          startSession(sessionDay);      // sessionDay should already be a number
+                          setActiveTopTab("track");
+                        }}
+
                       >
                         Start
                       </Button>

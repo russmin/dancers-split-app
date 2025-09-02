@@ -28,6 +28,23 @@ function fmt(s: number) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+const beep = () => {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.value = 880;
+    o.connect(g);
+    g.connect(ctx.destination);
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.15);
+    o.start();
+    o.stop(ctx.currentTime + 0.16);
+  } catch {}
+};
+
 export default function CircuitRunner({
   circuit,
   dateISO,
@@ -45,7 +62,12 @@ export default function CircuitRunner({
   const [remaining, setRemaining] = React.useState<number>(circuit.stations[0]?.seconds ?? 45);
   const [running, setRunning] = React.useState<boolean>(false);
 
-  // entries collected as we go (we only need work entries)
+  const totalStations = circuit.stations.length;
+  const stationSeconds = phase === "work"
+    ? (circuit.stations[stationIndex]?.seconds ?? 45)
+    : (stationIndex === totalStations ? (circuit.roundRestSec ?? 0) : circuit.stationRestSec);
+
+  const last5 = remaining <= 5 && running;
   const entriesRef = React.useRef<WorkoutEntry[]>([]);
 
   React.useEffect(() => {
@@ -54,9 +76,8 @@ export default function CircuitRunner({
       setRemaining((r) => {
         if (r <= 1) {
           clearInterval(id);
-          // Transition
+          beep();
           if (phase === "work") {
-            // push a timed entry for this work
             const st = circuit.stations[stationIndex];
             entriesRef.current.push({
               id: uid(),
@@ -65,15 +86,13 @@ export default function CircuitRunner({
               sets: 1,
               reps: st.seconds,
             });
-            // go to rest or next station/round
-            if (circuit.stationRestSec > 0) {
+            if (circuit.stationRestSec > 0 && stationIndex < totalStations - 1) {
               setPhase("rest");
               setRemaining(circuit.stationRestSec);
             } else {
               advanceToNext();
             }
           } else {
-            // finished rest: go to next
             advanceToNext();
           }
           return 0;
@@ -86,7 +105,7 @@ export default function CircuitRunner({
   }, [running, phase, stationIndex, round]);
 
   function advanceToNext() {
-    const lastStation = stationIndex >= circuit.stations.length - 1;
+    const lastStation = stationIndex >= totalStations - 1;
     if (!lastStation) {
       const nextIdx = stationIndex + 1;
       setStationIndex(nextIdx);
@@ -94,14 +113,11 @@ export default function CircuitRunner({
       setRemaining(circuit.stations[nextIdx].seconds);
       return;
     }
-    // last station in the round
     const lastRound = round >= circuit.rounds;
     if (!lastRound) {
-      // optional round rest
       if (circuit.roundRestSec && circuit.roundRestSec > 0) {
         setPhase("rest");
         setRemaining(circuit.roundRestSec);
-        // after round rest, move to next round’s first station
         setTimeout(() => {
           setRound((r) => r + 1);
           setStationIndex(0);
@@ -116,29 +132,58 @@ export default function CircuitRunner({
       }
       return;
     }
-    // all done
     onFinish([...entriesRef.current]);
-    // reset UI
     setRunning(false);
   }
 
-  const currentLabel =
-    phase === "work"
-      ? circuit.stations[stationIndex]?.label ?? "—"
-      : "Rest";
+  const currentLabel = phase === "work" ? (circuit.stations[stationIndex]?.label ?? "—") : "Rest";
+
+  const stationProgress =
+    stationSeconds > 0 ? (1 - remaining / stationSeconds) : 0; // 0..1
+  const roundProgress = ( (round - 1) * totalStations + (phase === "work" ? stationIndex : Math.min(stationIndex + 0.5, totalStations)) ) / (circuit.rounds * totalStations);
 
   return (
     <Card className="rounded-2xl shadow-sm">
       <CardHeader>
-        <CardTitle className="text-lg">{circuit.name} — Round {round}/{circuit.rounds}</CardTitle>
+        <CardTitle className="text-lg flex items-center justify-between">
+          <span>{circuit.name} — Round {round}/{circuit.rounds}</span>
+          <span className="text-xs text-slate-500">Station {stationIndex+1}/{totalStations}</span>
+        </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
+        {/* Round progress */}
+        <div className="h-1.5 w-full rounded bg-slate-100 overflow-hidden">
+          <div
+            className="h-full bg-slate-400 transition-all"
+            style={{ width: `${Math.max(0, Math.min(100, roundProgress * 100))}%` }}
+          />
+        </div>
+
         <div className="text-sm">
-          <div><Label>Current</Label></div>
+          <Label>Current</Label>
           <div className="text-base font-semibold">{currentLabel}</div>
         </div>
-        <div className="text-4xl font-mono">{fmt(remaining)}</div>
-        <div className="flex items-center gap-2">
+
+        {/* Timer */}
+        <div
+          className={[
+            "text-5xl font-mono text-center rounded-xl px-4 py-6 border",
+            phase === "work" ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200",
+            last5 ? "animate-pulse" : ""
+          ].join(" ")}
+        >
+          {fmt(remaining)}
+        </div>
+
+        {/* Station progress */}
+        <div className="h-2 w-full rounded bg-slate-100 overflow-hidden">
+          <div
+            className={`h-full transition-all ${phase === "work" ? "bg-emerald-500" : "bg-amber-500"}`}
+            style={{ width: `${Math.max(0, Math.min(100, stationProgress * 100))}%` }}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
           <Button className="rounded-xl" onClick={() => setRunning(r => !r)}>
             {running ? "Pause" : "Start"}
           </Button>
@@ -156,15 +201,16 @@ export default function CircuitRunner({
           >
             Reset
           </Button>
+          <Button variant="ghost" className="rounded-xl" onClick={() => setRemaining((r) => Math.max(0, r - 10))}>-10s</Button>
+          <Button variant="ghost" className="rounded-xl" onClick={() => setRemaining((r) => r + 10)}>+10s</Button>
+          <Button variant="outline" className="rounded-xl" onClick={advanceToNext}>Skip ▶</Button>
         </div>
 
-        {/* Simple preview */}
         <div className="text-xs text-slate-600">
           Stations:{" "}
           {circuit.stations.map((s, i) => (
             <span key={i}>
-              {i ? " • " : ""}
-              {s.label} {s.seconds}s
+              {i ? " • " : ""}{s.label} {s.seconds}s
             </span>
           ))}
           {circuit.stationRestSec ? ` • Rest ${circuit.stationRestSec}s` : ""}
@@ -174,3 +220,4 @@ export default function CircuitRunner({
     </Card>
   );
 }
+
