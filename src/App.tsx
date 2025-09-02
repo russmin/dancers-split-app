@@ -1,23 +1,76 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 import ProfileTab from "@/components/ProfileTab";
 import PlanTab from "@/components/PlanTab";
 import WorkoutLogTable from "@/components/WorkoutLogTable";
+import CircuitRunner, { type CircuitSpec } from "@/components/CircuitRunner";
+
 import { markPRsBeforeInsert } from "@/lib/pr";
-import { EXERCISES } from "@/lib/exercises";
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+// If you keep a manual-log picker you can re-enable this import.
+// import { EXERCISES } from "@/lib/exercises";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Upload, Download, PlusCircle, BarChart3, User } from "lucide-react";
-import CircuitRunner, { type CircuitSpec } from "@/components/CircuitRunner";
+import { BarChart3 } from "lucide-react";
 
+/* --------------------------------------------
+   Types
+---------------------------------------------*/
 type SessionMode = "sets" | "circuit";
 
+interface UserProfile {
+  name: string;
+  age?: number | "";
+  heightCm?: number | "";
+  weightKg?: number | "";
+  goal?: "strength" | "hypertrophy" | "endurance" | "general" | "";
+  unit?: "kg" | "lb";
+  // Program fields
+  programName?: string;
+  programDurationWeeks?: number | "";
+  daysPerWeek?: number | "";
+  preferredDays?: string[]; // Mon..Sun
+  programStartDate?: string; // YYYY-MM-DD
+}
+
+interface WorkoutEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  name: string; // exercise name
+  sets: number; // per-set logs will be 1
+  reps: number; // per-set reps OR seconds for timed entries
+  weightKg?: number; // stored in kg
+  notes?: string;
+}
+
+/* --------------------------------------------
+   Constants & helpers
+---------------------------------------------*/
+const STORAGE_KEYS = {
+  profile: "wt_profile_v5",
+  workouts: "wt_workouts_v5",
+} as const;
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+function uid() {
+  return Math.random().toString(36).slice(2, 8) + Date.now().toString(36);
+}
+
+const KG_PER_LB = 0.45359237;
+function toKg(value: number, unit: "kg" | "lb") {
+  return unit === "lb" ? value * KG_PER_LB : value;
+}
+function fromKg(kg: number, unit: "kg" | "lb") {
+  return unit === "lb" ? kg / KG_PER_LB : kg;
+}
 
 /* --------------------------------------------
    Plan Data (Final 4-Day Dancer's Split)
@@ -25,7 +78,7 @@ type SessionMode = "sets" | "circuit";
 const dancerSplit = [
   {
     day: 1,
-    title: "Lower Body Strength & Stability ",
+    title: "Lower Body Strength & Stability",
     exercises: [
       "Leg Press (Bilateral): 4x6-8 (2-3 min rest)",
       "Bulgarian Split Squats: 3x8/leg (90s rest)",
@@ -64,7 +117,7 @@ const dancerSplit = [
   },
   {
     day: 4,
-    title: "Dance-Specific Power & Plyometrics ",
+    title: "Dance-Specific Power & Plyometrics",
     exercises: [
       "Depth Drops to Stick Landing: 3x5 (2-3 min rest)",
       "Lateral Skater Jumps: 3x8/side (90s rest)",
@@ -77,65 +130,18 @@ const dancerSplit = [
 ] as const;
 
 /* --------------------------------------------
-   Types & Helpers
----------------------------------------------*/
-interface UserProfile {
-  name: string;
-  age?: number | "";
-  heightCm?: number | "";
-  weightKg?: number | "";
-  goal?: "strength" | "hypertrophy" | "endurance" | "general" | "";
-  unit?: "kg" | "lb";
-  // Program fields
-  programName?: string;
-  programDurationWeeks?: number | "";
-  daysPerWeek?: number | "";
-  preferredDays?: string[]; // Mon..Sun
-  programStartDate?: string; // YYYY-MM-DD
-}
-
-interface WorkoutEntry {
-  id: string;
-  date: string; // YYYY-MM-DD
-  name: string; // exercise name
-  sets: number; // per-set logs will be 1
-  reps: number; // per-set reps
-  weightKg?: number; // stored in kg
-  notes?: string;
-}
-
-const STORAGE_KEYS = {
-  profile: "wt_profile_v5",
-  workouts: "wt_workouts_v5",
-} as const;
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-function uid() {
-  return Math.random().toString(36).slice(2, 8) + Date.now().toString(36);
-}
-
-const KG_PER_LB = 0.45359237;
-function toKg(value: number, unit: "kg" | "lb") {
-  return unit === "lb" ? value * KG_PER_LB : value;
-}
-function fromKg(kg: number, unit: "kg" | "lb") {
-  return unit === "lb" ? kg / KG_PER_LB : kg;
-}
-
-/* --------------------------------------------
    Plan parsing helpers
 ---------------------------------------------*/
 function extractRestSeconds(source: string): number | undefined {
   const paren = source.match(/\(([^)]*?)\)/g);
   if (!paren) return undefined;
-  const restChunk = paren.find(p => /rest/i.test(p));
+  const restChunk = paren.find((p) => /rest/i.test(p));
   if (!restChunk) return undefined;
 
   const minRange = restChunk.match(/(\d+)\s*-\s*(\d+)\s*min/i);
   if (minRange) {
-    const a = Number(minRange[1]), b = Number(minRange[2]);
+    const a = Number(minRange[1]),
+      b = Number(minRange[2]);
     return Math.round(((a + b) / 2) * 60);
   }
   const minOnly = restChunk.match(/(\d+)\s*min/i);
@@ -145,25 +151,6 @@ function extractRestSeconds(source: string): number | undefined {
   if (sec) return Number(sec[1]);
 
   return undefined;
-}
-function day3ToCircuit(): CircuitSpec {
-  // You can tweak durations here
-  const base = [
-    { label: "Kettlebell Swings", seconds: 45 },
-    { label: "Box/Broad Jumps", seconds: 45 },
-    { label: "Push-Ups", seconds: 45 },
-    { label: "Single-Leg RDL (BW)", seconds: 45 }, // per leg is tricky; keep per-leg as separate stations if desired
-    { label: "Bird Dog Crunch", seconds: 45 }, // or fixed reps; we choose 45s timed for circuit consistency
-    { label: "Plank", seconds: 60 },
-  ];
-  return {
-    mode: "circuit",
-    name: "Full-Body Circuit",
-    rounds: 3,
-    stationRestSec: 30,     // rest between stations
-    roundRestSec: 60,       // rest between rounds (optional)
-    stations: base,
-  };
 }
 
 function parseSetsAndReps(ex: string) {
@@ -182,8 +169,27 @@ function parseSetsAndReps(ex: string) {
   return { sets: 3, reps: 10, timed: false as const };
 }
 
+function day3ToCircuit(): CircuitSpec {
+  const base = [
+    { label: "Kettlebell Swings", seconds: 45 },
+    { label: "Box/Broad Jumps", seconds: 45 },
+    { label: "Push-Ups", seconds: 45 },
+    { label: "Single-Leg RDL (BW)", seconds: 45 },
+    { label: "Bird Dog Crunch", seconds: 45 },
+    { label: "Plank", seconds: 60 },
+  ];
+  return {
+    mode: "circuit",
+    name: "Full-Body Circuit",
+    rounds: 3,
+    stationRestSec: 30,
+    roundRestSec: 60,
+    stations: base,
+  };
+}
+
 /* --------------------------------------------
-   RestTimer widget (auto-advances on finish if onDone provided)
+   Rest Timer (for sets/reps flow)
 ---------------------------------------------*/
 function RestTimer({
   seconds = 90,
@@ -196,9 +202,6 @@ function RestTimer({
 }) {
   const [remaining, setRemaining] = React.useState<number>(seconds);
   const [running, setRunning] = React.useState<boolean>(false);
-  const [workStartSignal, setWorkStartSignal] = useState(0); // for timed "work" countdown
-  const [wType, setWType] = useState<"standard" | "timed">("standard"); // manual log type
-  const [wSeconds, setWSeconds] = useState<string>(""); // manual log seconds (when timed)
 
   React.useEffect(() => {
     setRemaining(seconds);
@@ -208,7 +211,7 @@ function RestTimer({
   React.useEffect(() => {
     if (!running) return;
     const id = setInterval(() => {
-      setRemaining(prev => {
+      setRemaining((prev) => {
         if (prev <= 1) {
           clearInterval(id);
           setRunning(false);
@@ -230,14 +233,17 @@ function RestTimer({
   return (
     <div className="flex items-center gap-2 text-sm">
       <div className="font-mono">{fmt(remaining)}</div>
-      <Button size="sm" variant="outline" className="rounded-xl" onClick={() => setRunning(r => !r)}>
+      <Button size="sm" variant="outline" className="rounded-xl" onClick={() => setRunning((r) => !r)}>
         {running ? "Pause" : "Start"}
       </Button>
       <Button
         size="sm"
         variant="ghost"
         className="rounded-xl"
-        onClick={() => { setRunning(false); setRemaining(seconds); }}
+        onClick={() => {
+          setRunning(false);
+          setRemaining(seconds);
+        }}
       >
         Reset
       </Button>
@@ -261,46 +267,35 @@ export default function DancerSplitTracker() {
     programDurationWeeks: 12,
     daysPerWeek: 4,
     preferredDays: ["Mon", "Tue", "Thu", "Sat"],
-    programStartDate: new Date().toISOString().slice(0,10),
+    programStartDate: todayISO(),
   });
 
-  // Workouts
+  // Workouts (log)
   const [workouts, setWorkouts] = useState<WorkoutEntry[]>([]);
 
-  // Manual log form
-  const [wDate, setWDate] = useState<string>(todayISO());
-  const [wName, setWName] = useState<string>("");
-  const [wSets, setWSets] = useState<string>("3");
-  const [wReps, setWReps] = useState<string>("10");
-  const [wWeight, setWWeight] = useState<string>("");
-  const [wNotes, setWNotes] = useState<string>("");
-  const [wType, setWType] = useState<"sets" | "timed">("sets");
-  const [wSeconds, setWSeconds] = useState<string>("");
-
-  // Session runner
+  // Session runner state
   const [sessionActive, setSessionActive] = useState(false);
+  const [sessionMode, setSessionMode] = useState<SessionMode>("sets");
   const [sessionDay, setSessionDay] = useState<number>(1);
   const [sessionDate, setSessionDate] = useState<string>(todayISO());
-  const [sessionIdx, setSessionIdx] = useState(0);             // which exercise
-  const [currentSetIdx, setCurrentSetIdx] = useState(0);       // which set in exercise
-  const [restStartSignal, setRestStartSignal] = useState(0);   // bump to auto-start rest timer
-  const [sessionMode, setSessionMode] = useState<SessionMode>("sets");
+  const [sessionIdx, setSessionIdx] = useState(0);
+  const [currentSetIdx, setCurrentSetIdx] = useState(0);
+  const [restStartSignal, setRestStartSignal] = useState(0);
   const [circuitSpec, setCircuitSpec] = useState<CircuitSpec | null>(null);
-  const [isResting, setIsResting] = useState(false);
 
+  // Sets/reps session plan
+  const [sessionPlan, setSessionPlan] = useState<
+    {
+      name: string;
+      sets: { reps: number | ""; weight: number | "" }[];
+      timed?: boolean;
+      seconds?: number | "";
+      restSec?: number;
+    }[]
+  >([]);
 
-  const [sessionPlan, setSessionPlan] = useState<{
-    name: string;
-    sets: { reps: number | ""; weight: number | "" }[];
-    timed?: boolean;
-    seconds?: number | "";
-    restSec?: number;
-  }[]>([]);
-
-  // View state
-//  const [sortBy, setSortBy] = useState<"date" | "name" | "volume">("date");
+  // UI state
   const [exerciseFilter, setExerciseFilter] = useState<string>("__all");
- // const [editingId, setEditingId] = useState<string | null>(null);
   const [activeTopTab, setActiveTopTab] = useState<string>("plan");
   const [activePlanDay, setActivePlanDay] = useState<string>("1");
 
@@ -314,7 +309,9 @@ export default function DancerSplitTracker() {
       const w = localStorage.getItem(STORAGE_KEYS.workouts);
       if (p) setProfile(JSON.parse(p));
       if (w) setWorkouts(JSON.parse(w));
-    } catch {}
+    } catch {
+      // ignore
+    }
   }, []);
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.profile, JSON.stringify(profile));
@@ -325,7 +322,10 @@ export default function DancerSplitTracker() {
 
   // Derived
   const unit = profile.unit ?? "kg";
-  const uniqueExercises = useMemo(() => Array.from(new Set(workouts.map(w => w.name))).sort(), [workouts]);
+  const uniqueExercises = useMemo(
+    () => Array.from(new Set(workouts.map((w) => w.name))).sort(),
+    [workouts]
+  );
   const dailyData = useMemo(() => {
     const map = new Map<string, { date: string; volume: number }>();
     for (const w of workouts) {
@@ -337,41 +337,31 @@ export default function DancerSplitTracker() {
     }
     return Array.from(map.values()).sort((a, b) => (a.date < b.date ? -1 : 1));
   }, [workouts, exerciseFilter]);
-  // Completed dates for the calendar (any date present in workouts)
-  const completedDates = React.useMemo(() => {
+
+  const completedDates = useMemo(() => {
     const s = new Set<string>();
     for (const w of workouts) s.add(w.date);
     return s;
   }, [workouts]);
 
-/*   const sortedWorkouts = useMemo(() => {
-    const copy = [...workouts];
-    switch (sortBy) {
-      case "name":
-        copy.sort((a, b) => a.name.localeCompare(b.name));
-        break;
-      case "volume":
-        copy.sort((a, b) => (b.sets * b.reps * (b.weightKg ?? 1)) - (a.sets * a.reps * (a.weightKg ?? 1)));
-        break;
-      default:
-        copy.sort((a, b) => (a.date < b.date ? 1 : -1));
-    }
-    return copy;
-  }, [workouts, sortBy]); */
+  // Profile actions
+  function preferredToggle(day: string) {
+    setProfile((p) => ({
+      ...p,
+      preferredDays: p.preferredDays?.includes(day)
+        ? p.preferredDays.filter((d) => d !== day)
+        : [...(p.preferredDays || []), day],
+    }));
+  }
+  function handleProfileChange<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
+    setProfile((p) => ({ ...p, [key]: value }));
+  }
 
-  // Plan/session helpers
+  // Session helpers
   function startSession(day: number | string | undefined | null) {
     const dnum = Number(day);
-    console.log("[startSession] incoming=", day, "coerced=", dnum, "type:", typeof day);
-
     if (![1, 2, 3, 4].includes(dnum)) {
-      console.warn("[startSession] invalid day, falling back to 1");
-      setSessionActive(false);
-      setSessionMode("sets");
-      setCircuitSpec(null);
-      setSessionPlan([]);
-      // You can remove this alert after confirming
-      alert("That date/day didn’t map to a plan day. Starting Day 1 instead.");
+      // fallback to day 1 if an invalid value slips in
       return startSession(1);
     }
 
@@ -387,31 +377,32 @@ export default function DancerSplitTracker() {
     }
 
     // Other days → sets/reps
-    const d = dancerSplit.find(x => x.day === dnum);
-    if (!d) {
-      console.warn("[startSession] no plan for day:", dnum);
-      alert("No plan found for that day. Starting Day 1 instead.");
-      return startSession(1);
-    }
+    const d = dancerSplit.find((x) => x.day === dnum);
+    if (!d) return;
 
     const plan = d.exercises
-      .filter(s => !/^Format:/i.test(s))
-      .map(s => {
+      .filter((s) => !/^Format:/i.test(s))
+      .map((s) => {
         const name = s.split(":")[0];
         const parsed = parseSetsAndReps(s);
         const restSec = extractRestSeconds(s);
         if (parsed.timed) {
-          return { name, timed: true as const, seconds: parsed.seconds, restSec, sets: [{ reps: "", weight: "" }] };
+          return {
+            name,
+            timed: true as const,
+            seconds: parsed.seconds,
+            restSec,
+            sets: [{ reps: "", weight: "" }],
+          };
         }
-        const setsArr = Array.from({ length: parsed.sets }, () => ({ reps: parsed.reps as number, weight: "" as number | "" }));
+        const setsArr = Array.from({ length: parsed.sets }, () => ({
+          reps: parsed.reps as number,
+          weight: "" as number | "",
+        }));
         return { name, sets: setsArr, restSec };
       });
 
-    if (plan.length === 0) {
-      console.warn("[startSession] empty plan for day:", dnum);
-      alert("This day has no exercises. Starting Day 1 instead.");
-      return startSession(1);
-    }
+    if (plan.length === 0) return;
 
     setSessionPlan(plan as any);
     setSessionIdx(0);
@@ -422,170 +413,31 @@ export default function DancerSplitTracker() {
     setActiveTopTab("track");
   }
 
-
-    // Other days → Sets/Reps mode
-    const d = dancerSplit.find(x => x.day === day);
-    if (!d) return;
-
-    const plan = d.exercises
-      .filter(s => !/^Format:/i.test(s))
-      .map(s => {
-        const name = s.split(":")[0];
-        const parsed = parseSetsAndReps(s);
-        const restSec = extractRestSeconds(s);
-        if (parsed.timed) {
-          return { name, timed: true, seconds: parsed.seconds, restSec, sets: [{ reps: "", weight: "" }] };
-        }
-        const setsArr = Array.from(
-          { length: parsed.sets },
-          () => ({ reps: parsed.reps as number, weight: "" as number | "" })
-        );
-        return { name, sets: setsArr, restSec };
-      });
-
-    setSessionPlan(plan as any);
-    setSessionIdx(0);
-    setCurrentSetIdx(0);
-    setSessionDay(day);
-    setSessionMode("sets");
-    setSessionActive(true);
-    setActiveTopTab("track");
-  }
-
-
   function finishSessionAndSave() {
     const entries: WorkoutEntry[] = [];
     for (const ex of sessionPlan) {
       if (ex.timed) {
-        entries.push({ id: uid(), date: sessionDate, name: ex.name + " (sec)", sets: 1, reps: Number(ex.seconds) || 0, weightKg: undefined });
+        entries.push({
+          id: uid(),
+          date: sessionDate,
+          name: ex.name + " (sec)",
+          sets: 1,
+          reps: Number(ex.seconds) || 0,
+          weightKg: undefined,
+        });
         continue;
       }
       ex.sets.forEach((s) => {
         const reps = Number(s.reps) || 0;
-        const weightKg = s.weight === "" ? undefined : Math.round(toKg(Number(s.weight), unit) * 100) / 100;
+        const weightKg =
+          s.weight === "" ? undefined : Math.round(toKg(Number(s.weight), unit) * 100) / 100;
         entries.push({ id: uid(), date: sessionDate, name: ex.name, sets: 1, reps, weightKg });
       });
     }
     if (entries.length === 0) return setSessionActive(false);
     const withPR = markPRsBeforeInsert(workouts, entries);
-    setWorkouts(prev => [...withPR, ...prev]);
+    setWorkouts((prev) => [...withPR, ...prev]);
     setSessionActive(false);
-  }
-  function finishCircuitAndSave(spec: CircuitSpec) {
-    // Log each station per round as a timed entry (seconds in reps)
-    const entries: WorkoutEntry[] = [];
-    for (let r = 1; r <= spec.rounds; r++) {
-      for (const st of spec.stations) {
-        entries.push({
-          id: uid(),
-          date: sessionDate,
-          name: `${st.label} (sec)`,
-          sets: 1,
-          reps: st.seconds,
-          weightKg: undefined,
-        });
-      }
-    }
-    if (entries.length === 0) { setSessionActive(false); return; }
-    const withPR = markPRsBeforeInsert(workouts, entries);
-    setWorkouts(prev => [...withPR, ...prev]);
-    setSessionActive(false);
-    setSessionMode("sets");
-    setCircuitSpec(null);
-  }
-
-  function updateSet(exIdx: number, setIdx: number, field: "reps" | "weight", value: string) {
-    setSessionPlan(prev => prev.map((ex, i) => {
-      if (i !== exIdx || ex.timed) return ex;
-      const sets = ex.sets.map((s, j) => j === setIdx ? { ...s, [field]: value === "" ? "" : Number(value) } : s);
-      return { ...ex, sets };
-    }));
-  }
-
-  function preferredToggle(day: string) {
-    setProfile(p => ({
-      ...p,
-      preferredDays: p.preferredDays?.includes(day)
-        ? p.preferredDays.filter(d => d !== day)
-        : [...(p.preferredDays || []), day],
-    }));
-  }
-
-  // Generic actions
-  function handleProfileChange<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
-    setProfile(p => ({ ...p, [key]: value }));
-  }
-
-  function addWorkout(fromPlan?: { name: string }) {
-    const name = fromPlan?.name ?? wName;
-    if (!name.trim()) return alert("Please enter a workout name.");
-
-    if (wType === "timed") {
-      const seconds = Number(wSeconds);
-      if (!Number.isFinite(seconds) || seconds <= 0) {
-        return alert("Seconds must be a positive number.");
-      }
-      const entry: WorkoutEntry = {
-        id: uid(),
-        date: wDate,
-        name: `${name.trim()} (sec)`,
-        sets: 1,
-        reps: seconds,         // store time as reps=seconds for charts/volume
-        weightKg: undefined,
-        notes: wNotes.trim() || undefined,
-      };
-      const withPR = markPRsBeforeInsert(workouts, [entry]);
-      setWorkouts(prev => [...withPR, ...prev]);
-      if (!fromPlan) {
-        setWName("");
-        setWSeconds("");
-      }
-      return;
-    }
-  function addTimedWorkout(nameFromUI?: string, secondsFromUI?: string) {
-    const name = (nameFromUI ?? wName).trim();
-    const secs = Number(secondsFromUI ?? wSeconds);
-
-    if (!name) return alert("Please enter an exercise name.");
-    if (!Number.isFinite(secs) || secs <= 0) return alert("Duration must be a positive number (seconds).");
-
-    const entry: WorkoutEntry = {
-      id: uid(),
-      date: wDate,
-      name: name + " (sec)",  // keeps timed entries distinct
-      sets: 1,
-      reps: secs,             // store seconds in reps field
-      weightKg: undefined,
-      notes: wNotes.trim() || undefined,
-    };
-
-    const withPR = markPRsBeforeInsert(workouts, [entry]);
-    setWorkouts(prev => [...withPR, ...prev]);
-    setWSeconds("");
-    if (!nameFromUI) setWName("");
-}
-
-    // standard sets x reps x (optional) weight
-    const sets = Number(wSets);
-    const reps = Number(wReps);
-    const rawWeight = wWeight === "" ? undefined : Number(wWeight);
-    if (!Number.isFinite(sets) || sets <= 0) return alert("Sets must be a positive number.");
-    if (!Number.isFinite(reps) || reps <= 0) return alert("Reps must be a positive number.");
-    if (rawWeight !== undefined && (!Number.isFinite(rawWeight) || rawWeight < 0)) return alert("Weight must be a non-negative number.");
-
-    const entry: WorkoutEntry = {
-      id: uid(),
-      date: wDate,
-      name: name.trim(),
-      sets,
-      reps,
-      weightKg: rawWeight === undefined ? undefined : Math.round(toKg(rawWeight, unit) * 100) / 100,
-      notes: wNotes.trim() || undefined,
-    };
-    const withPR = markPRsBeforeInsert(workouts, [entry]);
-    setWorkouts(prev => [...withPR, ...prev]);
-
-    if (!fromPlan) setWName("");
   }
 
   // Export / Import
@@ -599,7 +451,9 @@ export default function DancerSplitTracker() {
     a.click();
     URL.revokeObjectURL(url);
   }
-  function onImportClick() { fileInputRef.current?.click(); }
+  function onImportClick() {
+    fileInputRef.current?.click();
+  }
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -619,7 +473,7 @@ export default function DancerSplitTracker() {
     reader.readAsText(file);
   }
 
-  // UI
+  // UI derived
   const profileComplete = profile.name.trim().length > 0;
 
   return (
@@ -627,8 +481,12 @@ export default function DancerSplitTracker() {
       <div className="mx-auto max-w-6xl space-y-6">
         <div className="flex items-center gap-3">
           <BarChart3 className="h-7 w-7" />
-          <motion.h1 initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="text-2xl md:text-3xl font-semibold tracking-tight">
-            Dancer's Split — Plan & Tracker
+          <motion.h1
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-2xl md:text-3xl font-semibold tracking-tight"
+          >
+            Dancer&apos;s Split — Plan & Tracker
           </motion.h1>
         </div>
 
@@ -667,14 +525,12 @@ export default function DancerSplitTracker() {
                 startSession(Number(day));
                 setActiveTopTab("track");
               }}
-
               /* Calendar props */
               preferredDays={(profile.preferredDays as any) || []}
               programStartDate={profile.programStartDate}
               daysPerWeek={profile.daysPerWeek as any}
               completedDates={completedDates}
               onPickDate={(isoDate, suggestedPlanDay) => {
-                // Set the session date from the calendar and jump straight to Track
                 setSessionDate(isoDate);
                 startSession(suggestedPlanDay ?? 1);
                 setActiveTopTab("track");
@@ -682,13 +538,11 @@ export default function DancerSplitTracker() {
             />
           </TabsContent>
 
-
-          {/* TRACK TAB (session runner + manual) */}
-
+          {/* TRACK TAB (circuit OR sets runner, else start) */}
           <TabsContent value="track">
             <div className="space-y-6">
-              {/* Session runner */}
-              {sessionMode === "circuit" && circuitSpec ? (
+              {/* 1) CIRCUIT MODE */}
+              {sessionActive && sessionMode === "circuit" && circuitSpec ? (
                 <Card className="rounded-2xl shadow-sm">
                   <CardHeader>
                     <CardTitle className="text-lg">
@@ -735,8 +589,8 @@ export default function DancerSplitTracker() {
                       <Button
                         className="rounded-xl"
                         onClick={() => {
-                          // If you want a manual finish, call onFinish with generated entries:
-                          const auto = [];
+                          // Optional manual finish (log all stations x rounds):
+                          const auto: WorkoutEntry[] = [];
                           for (let r = 1; r <= circuitSpec.rounds; r++) {
                             for (const st of circuitSpec.stations) {
                               auto.push({
@@ -760,8 +614,226 @@ export default function DancerSplitTracker() {
                     </div>
                   </CardContent>
                 </Card>
-              ) : (
-                /* ---------- START A SESSION ---------- */
+              ) : null}
+
+              {/* 2) SETS / REPS MODE */}
+              {sessionActive && sessionMode === "sets" ? (
+                <Card className="rounded-2xl shadow-sm">
+                  <CardHeader>
+                    <CardTitle className="text-lg">
+                      Session — Day {sessionDay}
+                      <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4 text-sm">
+                    <div>
+                      <Label htmlFor="sdate2">Session date</Label>
+                      <Input
+                        id="sdate2"
+                        type="date"
+                        value={sessionDate}
+                        onChange={(e) => setSessionDate(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div className="font-medium">{sessionPlan[sessionIdx]?.name ?? ""}</div>
+                      <div className="space-x-2">
+                        <Button
+                          variant="outline"
+                          className="rounded-xl"
+                          onClick={() => {
+                            setSessionIdx((i) => Math.max(0, i - 1));
+                            setCurrentSetIdx(0);
+                          }}
+                        >
+                          Prev
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="rounded-xl"
+                          onClick={() => {
+                            setSessionIdx((i) => Math.min(sessionPlan.length - 1, i + 1));
+                            setCurrentSetIdx(0);
+                          }}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Suggested rest + timer */}
+                    {typeof sessionPlan[sessionIdx]?.restSec === "number" && (
+                      <div className="flex items-center justify-between rounded-lg bg-slate-50 border p-3">
+                        <div className="text-xs text-slate-600">
+                          Suggested rest: {sessionPlan[sessionIdx]!.restSec}s
+                        </div>
+                        <RestTimer
+                          seconds={sessionPlan[sessionIdx]!.restSec}
+                          startSignal={restStartSignal}
+                          onDone={() => {
+                            if (!sessionPlan[sessionIdx]?.timed) {
+                              const sets = sessionPlan[sessionIdx]!.sets;
+                              if (currentSetIdx < sets.length - 1) {
+                                setCurrentSetIdx((i) => i + 1);
+                              } else if (sessionIdx < sessionPlan.length - 1) {
+                                setSessionIdx((i) => i + 1);
+                                setCurrentSetIdx(0);
+                              } else {
+                                finishSessionAndSave();
+                              }
+                            }
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {/* Timed vs sets table */}
+                    {sessionPlan[sessionIdx]?.timed ? (
+                      <div className="grid grid-cols-3 gap-3 max-w-md">
+                        <div>
+                          <Label>Seconds</Label>
+                          <Input
+                            inputMode="numeric"
+                            value={sessionPlan[sessionIdx].seconds as any}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSessionPlan((prev) =>
+                                prev.map((ex, i) =>
+                                  i === sessionIdx
+                                    ? { ...ex, seconds: v === "" ? "" : Number(v) }
+                                    : ex
+                                )
+                              );
+                            }}
+                          />
+                        </div>
+                        <div className="col-span-2 self-end text-slate-500">(timed movement)</div>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="min-w-[420px] text-sm">
+                          <thead>
+                            <tr className="text-left text-slate-500 border-b">
+                              <th className="py-2 pr-4">Set</th>
+                              <th className="py-2 pr-4">Reps</th>
+                              <th className="py-2 pr-4">Weight ({unit})</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sessionPlan[sessionIdx]?.sets.map((s, j) => (
+                              <tr
+                                key={j}
+                                className={`border-b last:border-0 ${
+                                  j === currentSetIdx ? "bg-slate-50" : ""
+                                }`}
+                              >
+                                <td className="py-2 pr-4">{j + 1}</td>
+                                <td className="py-2 pr-4">
+                                  <Input
+                                    inputMode="numeric"
+                                    value={String(s.reps)}
+                                    onChange={(e) =>
+                                      setSessionPlan((prev) =>
+                                        prev.map((ex, i) =>
+                                          i === sessionIdx
+                                            ? {
+                                                ...ex,
+                                                sets: ex.sets.map((x, k) =>
+                                                  k === j ? { ...x, reps: Number(e.target.value) || "" } : x
+                                                ),
+                                              }
+                                            : ex
+                                        )
+                                      )
+                                    }
+                                  />
+                                </td>
+                                <td className="py-2 pr-4">
+                                  <Input
+                                    inputMode="numeric"
+                                    value={s.weight === "" ? "" : String(s.weight)}
+                                    onChange={(e) =>
+                                      setSessionPlan((prev) =>
+                                        prev.map((ex, i) =>
+                                          i === sessionIdx
+                                            ? {
+                                                ...ex,
+                                                sets: ex.sets.map((x, k) =>
+                                                  k === j ? { ...x, weight: Number(e.target.value) || "" } : x
+                                                ),
+                                              }
+                                            : ex
+                                        )
+                                      )
+                                    }
+                                    placeholder={unit === "kg" ? "40" : "90"}
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Complete Set button (for non-timed) */}
+                    {!sessionPlan[sessionIdx]?.timed && (
+                      <div className="flex items-center justify-end">
+                        <Button
+                          className="rounded-xl"
+                          onClick={() => {
+                            const rest = sessionPlan[sessionIdx]?.restSec ?? 0;
+                            if (rest > 0) {
+                              setRestStartSignal((n) => n + 1);
+                            } else {
+                              const sets = sessionPlan[sessionIdx]!.sets;
+                              if (currentSetIdx < sets.length - 1) {
+                                setCurrentSetIdx((i) => i + 1);
+                              } else if (sessionIdx < sessionPlan.length - 1) {
+                                setSessionIdx((i) => i + 1);
+                                setCurrentSetIdx(0);
+                              } else {
+                                finishSessionAndSave();
+                              }
+                            }
+                          }}
+                        >
+                          Complete Set →
+                        </Button>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between">
+                      <Button
+                        variant="outline"
+                        className="rounded-xl"
+                        onClick={() => setSessionActive(false)}
+                      >
+                        Cancel
+                      </Button>
+                      {sessionIdx === sessionPlan.length - 1 ? (
+                        <Button className="rounded-xl" onClick={finishSessionAndSave}>
+                          Finish Session & Save
+                        </Button>
+                      ) : (
+                        <Button
+                          className="rounded-xl"
+                          onClick={() => {
+                            setSessionIdx((i) => Math.min(sessionPlan.length - 1, i + 1));
+                            setCurrentSetIdx(0);
+                          }}
+                        >
+                          Complete Exercise →
+                        </Button>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {/* 3) START A SESSION (when not active) */}
+              {!sessionActive ? (
                 <Card className="rounded-2xl shadow-sm">
                   <CardHeader>
                     <CardTitle className="text-lg">Start a Session</CardTitle>
@@ -769,10 +841,7 @@ export default function DancerSplitTracker() {
                   <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
                     <div>
                       <Label>Day</Label>
-                      <Select
-                        value={String(sessionDay)}
-                        onValueChange={(v) => setSessionDay(Number(v))}
-                      >
+                      <Select value={String(sessionDay)} onValueChange={(v) => setSessionDay(Number(v))}>
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
@@ -797,20 +866,18 @@ export default function DancerSplitTracker() {
                       <Button
                         className="w-full rounded-xl"
                         onClick={() => {
-                          startSession(sessionDay);      // sessionDay should already be a number
+                          startSession(sessionDay);
                           setActiveTopTab("track");
                         }}
-
                       >
                         Start
                       </Button>
                     </div>
                   </CardContent>
                 </Card>
-              )}
+              ) : null}
             </div>
           </TabsContent>
-
 
           {/* PROGRESS TAB */}
           <TabsContent value="progress">
@@ -820,10 +887,16 @@ export default function DancerSplitTracker() {
                 <div className="flex items-center gap-2 text-sm">
                   <Label className="mr-1">Exercise</Label>
                   <Select value={exerciseFilter} onValueChange={(v) => setExerciseFilter(v)}>
-                    <SelectTrigger className="w-[180px]"><SelectValue placeholder="All exercises" /></SelectTrigger>
+                    <SelectTrigger className="w-[180px]">
+                      <SelectValue placeholder="All exercises" />
+                    </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="__all">All exercises</SelectItem>
-                      {uniqueExercises.map(n => (<SelectItem key={n} value={n}>{n}</SelectItem>))}
+                      {uniqueExercises.map((n) => (
+                        <SelectItem key={n} value={n}>
+                          {n}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -831,7 +904,9 @@ export default function DancerSplitTracker() {
               <CardContent>
                 <div className="h-64 w-full">
                   {dailyData.length === 0 ? (
-                    <div className="h-full grid place-items-center text-sm text-slate-500">No data yet — add a workout to see progress.</div>
+                    <div className="h-full grid place-items-center text-sm text-slate-500">
+                      No data yet — add a workout to see progress.
+                    </div>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={dailyData} margin={{ left: 8, right: 8, top: 8, bottom: 8 }}>
@@ -840,7 +915,9 @@ export default function DancerSplitTracker() {
                         <YAxis tick={{ fontSize: 12 }} />
                         <Tooltip
                           formatter={(value: any) => [
-                            unit === "kg" ? value : Math.round(fromKg(Number(value), unit) * 10) / 10,
+                            unit === "kg"
+                              ? value
+                              : Math.round(fromKg(Number(value), unit) * 10) / 10,
                             unit === "kg" ? "Volume (kg×reps)" : "Volume (lb×reps)",
                           ]}
                           labelClassName="text-xs"
@@ -850,16 +927,13 @@ export default function DancerSplitTracker() {
                     </ResponsiveContainer>
                   )}
                 </div>
-                <p className="text-xs text-slate-500 mt-2">Volume = sets × reps × weight ({unit}); weightless entries count as 1 per rep.</p>
+                <p className="text-xs text-slate-500 mt-2">
+                  Volume = sets × reps × weight ({unit}); entries without weight count as 1 per rep.
+                </p>
               </CardContent>
             </Card>
 
-            <WorkoutLogTable
-              workouts={workouts}
-              unit={unit}
-              onChange={setWorkouts}
-            />
-
+            <WorkoutLogTable workouts={workouts} unit={unit} onChange={setWorkouts} />
           </TabsContent>
         </Tabs>
 
