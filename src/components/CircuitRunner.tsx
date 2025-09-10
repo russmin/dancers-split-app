@@ -106,6 +106,8 @@ export default function CircuitRunner({
 
   function advanceToNext() {
     const lastStation = stationIndex >= totalStations - 1;
+    const lastRound = round >= circuit.rounds;
+
     if (!lastStation) {
       const nextIdx = stationIndex + 1;
       setStationIndex(nextIdx);
@@ -113,34 +115,55 @@ export default function CircuitRunner({
       setRemaining(circuit.stations[nextIdx].seconds);
       return;
     }
-    const lastRound = round >= circuit.rounds;
+
+    // If we're done with a round, but not all rounds
     if (!lastRound) {
+      const nextRound = round + 1;
+
       if (circuit.roundRestSec && circuit.roundRestSec > 0) {
         setPhase("rest");
         setRemaining(circuit.roundRestSec);
+
+        // After the round rest, go to next round
         setTimeout(() => {
-          setRound((r) => r + 1);
+          setRound(nextRound);
           setStationIndex(0);
           setPhase("work");
           setRemaining(circuit.stations[0].seconds);
-        }, 0);
+        }, circuit.roundRestSec * 1000);
       } else {
-        setRound((r) => r + 1);
+        setRound(nextRound);
         setStationIndex(0);
         setPhase("work");
         setRemaining(circuit.stations[0].seconds);
       }
       return;
     }
+
+    // Last station of last round = complete
     onFinish([...entriesRef.current]);
     setRunning(false);
-  }
+}
+
 
   const currentLabel = phase === "work" ? (circuit.stations[stationIndex]?.label ?? "—") : "Rest";
 
   const stationProgress =
     stationSeconds > 0 ? (1 - remaining / stationSeconds) : 0; // 0..1
   const roundProgress = ( (round - 1) * totalStations + (phase === "work" ? stationIndex : Math.min(stationIndex + 0.5, totalStations)) ) / (circuit.rounds * totalStations);
+  const nextStationLabel =
+    phase === "rest" && stationIndex < totalStations - 1
+      ? circuit.stations[stationIndex + 1]?.label
+      : phase === "rest" && stationIndex >= totalStations - 1 && round < circuit.rounds
+        ? circuit.stations[0]?.label
+        : null;
+
+  const nextStationSeconds =
+    phase === "rest" && stationIndex < totalStations - 1
+      ? circuit.stations[stationIndex + 1]?.seconds
+      : phase === "rest" && stationIndex >= totalStations - 1 && round < circuit.rounds
+        ? circuit.stations[0]?.seconds
+        : null;
 
   return (
     <Card className="rounded-2xl shadow-sm">
@@ -174,7 +197,11 @@ export default function CircuitRunner({
         >
           {fmt(remaining)}
         </div>
-
+        {nextStationLabel && nextStationSeconds && (
+          <div className="text-sm text-slate-600 text-center">
+            🔜 Up Next: <strong>{nextStationLabel}</strong> ({nextStationSeconds}s)
+          </div>
+        )}
         {/* Station progress */}
         <div className="h-2 w-full rounded bg-slate-100 overflow-hidden">
           <div

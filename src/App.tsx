@@ -4,12 +4,12 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 
 import ProfileTab from "@/components/ProfileTab";
 import PlanTab from "@/components/PlanTab";
-import WorkoutLogTable from "@/components/WorkoutLogTable";
 import CircuitRunner, { type CircuitSpec } from "@/components/CircuitRunner";
+import WeeklyWorkoutLog from "@/Progress/WeeklyWorkoutLog";
 
 import { markPRsBeforeInsert } from "@/lib/pr";
 // If you keep a manual-log picker you can re-enable this import.
-// import { EXERCISES } from "@/lib/exercises";
+import { EXERCISES } from "@/lib/exercises";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -103,23 +103,23 @@ const dancerSplit = [
     title: "Lower Body Strength & Stability",
     exercises: [
       "Leg Press (Bilateral): 4x6-8 (2-3 min rest)",
-      "Bulgarian Split Squats: 3x8/leg (90s rest)",
-      "Romanian Deadlifts: 3x10 (90s rest)",
-      "Single-Leg Leg Curl: 3x10/leg (60s rest)",
+      "Bulgarian Split Squats: 3x8-10/leg (90s rest)",
+      "Romanian Deadlifts: 3x8-10 (90s rest)",
+      "Single-Leg Leg Curl: 3x8-10/leg (60s rest)",
       "Pallof Press: 3x10-12/side (60s rest)",
       "Deep Goblet Squat Hold (Kettlebell): 3x30s (60s rest)",
-      "Standing Calf Raises: 4x15 (45s rest)",
+      "Standing Calf Raises: 4x12-15 (45s rest)",
     ],
   },
   {
     day: 2,
     title: "Upper Body Strength & Posture",
     exercises: [
-      "Lat Pulldown (Wide Grip): 4x10 (2-3 min rest)",
-      "Seated Row (Neutral Grip): 3x12 (90s rest)",
-      "Smith Machine Overhead Press: 3x8 (90s rest)",
-      "Incline Dumbbell Press: 3x10 (90s rest)",
-      "Cable Face Pulls: 3x15 (60s rest)",
+      "Lat Pulldown (Wide Grip): 4x10-12 (2-3 min rest)",
+      "Seated Row (Neutral Grip): 3x12-15 (90s rest)",
+      "Smith Machine Overhead Press: 3x6-8 (90s rest)",
+      "Incline Dumbbell Press: 3x8-10 (90s rest)",
+      "Cable Face Pulls: 3x12-15 (60s rest)",
       "Assisted Dips: 3 sets to failure (60s rest)",
       "Suitcase Carry (Finisher): 2x30s/side (No rest between sides)",
     ],
@@ -346,8 +346,9 @@ export default function DancerSplitTracker() {
   const [currentSetIdx, setCurrentSetIdx] = useState(0);
   const [restStartSignal, setRestStartSignal] = useState(0);
   const [circuitSpec, setCircuitSpec] = useState<CircuitSpec | null>(null);
-
-  // Sets/reps session plan
+  const [circuitManual, setCircuitManual] = useState<
+    { reps?: number | ""; weight?: number | "" }[]
+  >([]);
   const [sessionPlan, setSessionPlan] = useState<
     {
       name: string;
@@ -355,8 +356,14 @@ export default function DancerSplitTracker() {
       timed?: boolean;
       seconds?: number | "";
       restSec?: number;
+      rounds?: number;              // <-- NEW: for timed exercises
+      reps?: number | "";           // <-- NEW: optional reps for timed
+      weight?: number | "";         // <-- NEW: optional weight for timed
     }[]
   >([]);
+  const [timerActive, setTimerActive] = useState(false);
+  const [timerRemaining, setTimerRemaining] = useState<number | null>(null);
+
 
   // UI state
   const [exerciseFilter, setExerciseFilter] = useState<string>("__all");
@@ -384,6 +391,23 @@ export default function DancerSplitTracker() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.workouts, JSON.stringify(workouts));
   }, [workouts]);
+  useEffect(() => {
+    if (!timerActive || timerRemaining === null) return;
+
+    const interval = setInterval(() => {
+      setTimerRemaining((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval);
+          setTimerActive(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [timerActive, timerRemaining]);
+
 
   // Derived
   const unit = profile.unit ?? "kg";
@@ -500,30 +524,73 @@ export default function DancerSplitTracker() {
 
   function finishSessionAndSave() {
     const entries: WorkoutEntry[] = [];
+
     for (const ex of sessionPlan) {
       if (ex.timed) {
+        const seconds = typeof ex.seconds === "number" ? ex.seconds : Number(ex.seconds) || 0;
+
         entries.push({
           id: uid(),
           date: sessionDate,
           name: ex.name + " (sec)",
           sets: 1,
-          reps: Number(ex.seconds) || 0,
+          reps: seconds,
           weightKg: undefined,
         });
-        continue;
+
+        // Optionally store reps/weight for timed movement
+        for (const set of ex.sets) {
+          const reps = typeof set.reps === "number" ? set.reps : Number(set.reps);
+          const weight = typeof set.weight === "number" ? set.weight : Number(set.weight);
+
+          if (!isNaN(reps) || !isNaN(weight)) {
+            entries.push({
+              id: uid(),
+              date: sessionDate,
+              name: ex.name,
+              sets: 1,
+              reps: isNaN(reps) ? 0 : reps,
+              weightKg:
+                unit === "lb"
+                  ? isNaN(weight)
+                    ? undefined
+                    : Math.round(weight * 0.45359237 * 100) / 100
+                  : isNaN(weight)
+                  ? undefined
+                  : weight,
+            });
+          }
+        }
+      } else {
+        for (const set of ex.sets) {
+          const reps = typeof set.reps === "number" ? set.reps : Number(set.reps);
+          const weight = typeof set.weight === "number" ? set.weight : Number(set.weight);
+
+          entries.push({
+            id: uid(),
+            date: sessionDate,
+            name: ex.name,
+            sets: 1,
+            reps: isNaN(reps) ? 0 : reps,
+            weightKg:
+              unit === "lb"
+                ? isNaN(weight)
+                  ? undefined
+                  : Math.round(weight * 0.45359237 * 100) / 100
+                : isNaN(weight)
+                ? undefined
+                : weight,
+          });
+        }
       }
-      ex.sets.forEach((s) => {
-        const reps = Number(s.reps) || 0;
-        const weightKg =
-          s.weight === "" ? undefined : Math.round(toKg(Number(s.weight), unit) * 100) / 100;
-        entries.push({ id: uid(), date: sessionDate, name: ex.name, sets: 1, reps, weightKg });
-      });
     }
-    if (entries.length === 0) return setSessionActive(false);
+
     const withPR = markPRsBeforeInsert(workouts, entries);
     setWorkouts((prev) => [...withPR, ...prev]);
     setSessionActive(false);
   }
+
+
 
   // Export / Import
   function exportJSON() {
@@ -560,6 +627,7 @@ export default function DancerSplitTracker() {
 
   // UI derived
   const profileComplete = profile.name.trim().length > 0;
+
 
     // Prefill manual log with PO when an exercise is chosen
   useEffect(() => {
@@ -687,6 +755,46 @@ export default function DancerSplitTracker() {
                       }}
                     />
 
+                    <div className="space-y-4">
+                      {circuitSpec.stations.map((st, i) => (
+                        <div key={i} className="border p-3 rounded-xl bg-slate-50">
+                          <Label className="block mb-1 text-sm font-semibold">{st.label}</Label>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                            <div>
+                              <Label>Reps</Label>
+                              <Input
+                                type="number"
+                                value={circuitManual[i]?.reps ?? ""}
+                                onChange={(e) => {
+                                  const val = Number(e.target.value);
+                                  setCircuitManual((prev) => {
+                                    const copy = [...prev];
+                                    copy[i] = { ...copy[i], reps: isNaN(val) ? "" : val };
+                                    return copy;
+                                  });
+                                }}
+                              />
+                            </div>
+                            <div>
+                              <Label>Weight ({unit})</Label>
+                              <Input
+                                type="number"
+                                value={circuitManual[i]?.weight ?? ""}
+                                onChange={(e) => {
+                                  const val = Number(e.target.value);
+                                  setCircuitManual((prev) => {
+                                    const copy = [...prev];
+                                    copy[i] = { ...copy[i], weight: isNaN(val) ? "" : val };
+                                    return copy;
+                                  });
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
                     <div className="flex items-center justify-between">
                       <Button
                         variant="outline"
@@ -699,22 +807,53 @@ export default function DancerSplitTracker() {
                       >
                         Cancel
                       </Button>
+
                       <Button
                         className="rounded-xl"
                         onClick={() => {
-                          // Optional manual finish (log all stations x rounds):
                           const auto: WorkoutEntry[] = [];
+
                           for (let r = 1; r <= circuitSpec.rounds; r++) {
-                            for (const st of circuitSpec.stations) {
+                            for (let i = 0; i < circuitSpec.stations.length; i++) {
+                              const st = circuitSpec.stations[i];
+                              const manual = circuitManual[i] || {};
+
+                              // Always log the timed portion
                               auto.push({
                                 id: uid(),
                                 date: sessionDate,
                                 name: `${st.label} (sec)`,
                                 sets: 1,
-                                reps: st.seconds,
+                                reps: st.seconds, // already a number
                               });
+
+                              // Sanitize reps and weight input
+                              const reps =
+                                typeof manual.reps === "number" ? manual.reps : Number(manual.reps);
+                              const weight =
+                                typeof manual.weight === "number"
+                                  ? manual.weight
+                                  : Number(manual.weight);
+
+                              // Only push manual log if user entered something
+                              if (!isNaN(reps) || !isNaN(weight)) {
+                                auto.push({
+                                  id: uid(),
+                                  date: sessionDate,
+                                  name: st.label,
+                                  sets: 1,
+                                  reps: isNaN(reps) ? 0 : reps,
+                                  weightKg:
+                                    isNaN(weight)
+                                      ? undefined
+                                      : unit === "lb"
+                                      ? Math.round(weight * 0.45359237 * 100) / 100
+                                      : weight,
+                                });
+                              }
                             }
                           }
+
                           const withPR = markPRsBeforeInsert(workouts, auto);
                           setWorkouts((prev) => [...withPR, ...prev]);
                           setSessionActive(false);
@@ -728,6 +867,7 @@ export default function DancerSplitTracker() {
                   </CardContent>
                 </Card>
               ) : null}
+
 
               {/* 2) SETS / REPS MODE */}
               {sessionActive && sessionMode === "sets" ? (
@@ -778,22 +918,48 @@ export default function DancerSplitTracker() {
                       <div className="text-xs text-slate-600 flex items-center gap-2">
                         <span>Type:</span>
                         {sessionPlan[sessionIdx]?.timed ? (
-                          <>
-                            <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800">Timed</span>
-                            <Button size="sm" variant="outline" className="rounded-lg"
-                              onClick={() => {
-                                setSessionPlan(prev => prev.map((ex, i) => i === sessionIdx
-                                  ? {
-                                      name: ex.name,
-                                      timed: false,
-                                      restSec: ex.restSec,
-                                      sets: [{ reps: 10, weight: "" }, { reps: 10, weight: "" }, { reps: 10, weight: "" }],
-                                    }
-                                  : ex));
-                              }}>
-                              Convert to Sets/Reps
-                            </Button>
-                          </>
+                          <div className="space-y-1 max-w-md">
+                            <Label>Timed Exercise</Label>
+                            <div className="flex items-center gap-3">
+                              <Input
+                                className="w-24"
+                                inputMode="numeric"
+                                value={sessionPlan[sessionIdx].seconds as any}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setSessionPlan((prev) =>
+                                    prev.map((ex, i) =>
+                                      i === sessionIdx
+                                        ? { ...ex, seconds: v === "" ? "" : Number(v) }
+                                        : ex
+                                    )
+                                  );
+                                }}
+                              />
+                              {!timerActive ? (
+                                <Button
+                                  variant="outline"
+                                  className="rounded-xl text-sm"
+                                  onClick={() => {
+                                    setTimerRemaining(sessionPlan[sessionIdx].seconds as number);
+                                    setTimerActive(true);
+                                  }}
+                                >
+                                  ▶ Start Timer
+                                </Button>
+                              ) : (
+                                <div
+                                  className={`text-lg font-mono px-3 py-1 rounded border ${
+                                    timerRemaining <= 5 ? "bg-yellow-100 animate-pulse" : "bg-slate-100"
+                                  }`}
+                                >
+                                  {Math.floor(timerRemaining / 60)}:
+                                  {(timerRemaining % 60).toString().padStart(2, "0")}
+                                </div>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-500">Enter duration and use the timer to track rest or work.</p>
+                          </div>
                         ) : (
                           <>
                             <span className="px-2 py-0.5 rounded bg-slate-100">Sets/Reps</span>
@@ -867,11 +1033,12 @@ export default function DancerSplitTracker() {
                     {/* Timed vs sets table */}
                     {sessionPlan[sessionIdx]?.timed ? (
                       <div className="grid grid-cols-3 gap-3 max-w-md">
+                        {/* Seconds */}
                         <div>
                           <Label>Seconds</Label>
                           <Input
                             inputMode="numeric"
-                            value={sessionPlan[sessionIdx].seconds as any}
+                            value={sessionPlan[sessionIdx].seconds ?? ""}
                             onChange={(e) => {
                               const v = e.target.value;
                               setSessionPlan((prev) =>
@@ -884,7 +1051,66 @@ export default function DancerSplitTracker() {
                             }}
                           />
                         </div>
-                        <div className="col-span-2 self-end text-slate-500">(timed movement)</div>
+
+                        {/* Rounds */}
+                        <div>
+                          <Label>Rounds</Label>
+                          <Input
+                            inputMode="numeric"
+                            value={sessionPlan[sessionIdx].rounds ?? 1}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSessionPlan((prev) =>
+                                prev.map((ex, i) =>
+                                  i === sessionIdx
+                                    ? { ...ex, rounds: v === "" ? 1 : Number(v) }
+                                    : ex
+                                )
+                              );
+                            }}
+                          />
+                        </div>
+
+                        {/* Spacer */}
+                        <div className="self-end text-slate-500">(timed movement)</div>
+
+                        {/* Reps (optional) */}
+                        <div>
+                          <Label>Reps (optional)</Label>
+                          <Input
+                            inputMode="numeric"
+                            value={sessionPlan[sessionIdx].reps ?? ""}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSessionPlan((prev) =>
+                                prev.map((ex, i) =>
+                                  i === sessionIdx
+                                    ? { ...ex, reps: v === "" ? "" : Number(v) }
+                                    : ex
+                                )
+                              );
+                            }}
+                          />
+                        </div>
+
+                        {/* Weight (optional) */}
+                        <div>
+                          <Label>Weight ({unit})</Label>
+                          <Input
+                            inputMode="numeric"
+                            value={sessionPlan[sessionIdx].weight ?? ""}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setSessionPlan((prev) =>
+                                prev.map((ex, i) =>
+                                  i === sessionIdx
+                                    ? { ...ex, weight: v === "" ? "" : Number(v) }
+                                    : ex
+                                )
+                              );
+                            }}
+                          />
+                        </div>
                       </div>
                     ) : (
                       <div className="overflow-x-auto">
@@ -953,6 +1179,26 @@ export default function DancerSplitTracker() {
                             ))}
                           </tbody>
                         </table>
+                        <div className="mt-2 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setSessionPlan((prev) =>
+                                prev.map((ex, i) =>
+                                  i === sessionIdx
+                                    ? {
+                                        ...ex,
+                                        sets: [...ex.sets, { reps: "", weight: "" }],
+                                      }
+                                    : ex
+                                )
+                              );
+                            }}
+                          >
+                            + Add Set
+                          </Button>
+                        </div>
                       </div>
                     )}
 
@@ -1210,7 +1456,7 @@ export default function DancerSplitTracker() {
               </CardContent>
             </Card>
 
-            <WorkoutLogTable workouts={workouts} unit={unit} onChange={setWorkouts} />
+            <WeeklyWorkoutLog workouts={workouts} unit={unit} />
           </TabsContent>
         </Tabs>
 
