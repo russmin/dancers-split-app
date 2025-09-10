@@ -77,7 +77,21 @@ const PO_INCR = { kg: 2.5, lb: 5 }; // +2.5kg or +5lb
 function isTimedName(name: string) {
   return /\(sec\)\s*$/.test(name);
 }
-
+function getTargetRepRangeForExercise(name: string): [number, number] | null {
+  const match = name.match(/(\d+)\s*-\s*(\d+)/);
+  if (match) return [Number(match[1]), Number(match[2])];
+  return null;
+}
+function extractRepRangeFromName(name: string): [number, number] {
+  const match = name.match(/(\d+)\s*-\s*(\d+)/); // matches "10-12"
+  if (match) return [Number(match[1]), Number(match[2])];
+  const single = name.match(/(\d+)\s*reps?/i);
+  if (single) {
+    const val = Number(single[1]);
+    return [val, val]; // fallback to fixed
+  }
+  return [10, 12]; // default range
+}
 /** Return the most recent non-timed entry for the exact exercise name */
 function lastEntryFor(workouts: WorkoutEntry[], name: string): WorkoutEntry | undefined {
   // your list is newest-first after saves, but be safe and sort by date desc then by array order
@@ -176,19 +190,37 @@ function extractRestSeconds(source: string): number | undefined {
 }
 
 function parseSetsAndReps(ex: string) {
-  const head = ex.split("(")[0]; // ignore parenthetical notes like (90s rest)
+  const head = ex.split("(")[0];
 
   const m = head.match(/(\d+)\s*x\s*(\d+)(?:\s*-\s*(\d+))?/i);
   if (m) {
     const sets = Number(m[1]);
-    const reps = m[3] ? Number(m[3]) : Number(m[2]); // use upper bound if range
-    return { sets, reps, timed: false as const };
+    const repMin = Number(m[2]);
+    const repMax = m[3] ? Number(m[3]) : repMin;
+    return { sets, reps: repMin, repMin, repMax, timed: false as const };
   }
 
   const t = head.match(/(\d+)\s*(s|sec|secs|second|seconds)/i);
   if (t) return { sets: 1, reps: 0, timed: true as const, seconds: Number(t[1]) };
 
-  return { sets: 3, reps: 10, timed: false as const };
+  return { sets: 3, reps: 10, repMin: 10, repMax: 10, timed: false as const };
+}
+function getProgressiveTarget({
+  lastReps,
+  lastWeight,
+  repMin,
+  repMax,
+}: {
+  lastReps: number;
+  lastWeight: number;
+  repMin: number;
+  repMax: number;
+}) {
+  if (lastReps < repMax) {
+    return { reps: lastReps + 1, weight: lastWeight };
+  } else {
+    return { reps: repMin, weight: Math.round((lastWeight + 5) * 10) / 10 };
+  }
 }
 
 function day3ToCircuit(): CircuitSpec {
@@ -208,6 +240,12 @@ function day3ToCircuit(): CircuitSpec {
     roundRestSec: 60,
     stations: base,
   };
+}
+function getLastWorkoutFor(name: string, logs: WorkoutEntry[]) {
+  const filtered = logs.filter(w => w.name === name && typeof w.reps === "number" && w.reps > 0);
+  if (filtered.length === 0) return null;
+
+  return filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
 }
 
 /* --------------------------------------------
@@ -349,18 +387,22 @@ export default function DancerSplitTracker() {
   const [circuitManual, setCircuitManual] = useState<
     { reps?: number | ""; weight?: number | "" }[]
   >([]);
-  const [sessionPlan, setSessionPlan] = useState<
-    {
-      name: string;
-      sets: { reps: number | ""; weight: number | "" }[];
-      timed?: boolean;
-      seconds?: number | "";
-      restSec?: number;
-      rounds?: number;              // <-- NEW: for timed exercises
-      reps?: number | "";           // <-- NEW: optional reps for timed
-      weight?: number | "";         // <-- NEW: optional weight for timed
-    }[]
-  >([]);
+  const [sessionPlan, setSessionPlan] = useState<{
+    name: string;
+    sets: {
+      reps: number | "";
+      weight: number | "";
+      suggestedReps?: number;
+      suggestedWeight?: number;
+    }[];
+    timed?: boolean;
+    seconds?: number | "";
+    restSec?: number;
+    rounds?: number;
+    reps?: number | "";
+    weight?: number | "";
+  }[]>([]);
+
   const [timerActive, setTimerActive] = useState(false);
   const [timerRemaining, setTimerRemaining] = useState<number | null>(null);
 
@@ -445,6 +487,55 @@ export default function DancerSplitTracker() {
   function handleProfileChange<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
     setProfile((p) => ({ ...p, [key]: value }));
   }
+  function applyProgressiveOverload(
+    plan: {
+      name: string;
+      sets: { reps: number | ""; weight: number | "" }[];
+      restSec?: number;
+      timed?: boolean;
+      seconds?: number;
+    }[],
+    workouts: WorkoutEntry[],
+    unit: "kg" | "lb"
+  ) {
+    return plan.map((exercise) => {
+      if (exercise.timed) return exercise; // Skip timed
+
+      const prev = lastEntryFor(workouts, exercise.name);
+      if (!prev) return exercise;
+
+      const newSets = exercise.sets.map((set) => {
+        let suggestedReps = undefined;
+        let suggestedWeight = undefined;
+
+        if (typeof prev.reps === "number" && typeof set.reps === "number") {
+          const targetRange = getTargetRepRangeForExercise(exercise.name);
+          const topOfRange = targetRange?.[1] ?? set.reps;
+
+          if (prev.reps < topOfRange) {
+            suggestedReps = prev.reps + 1;
+          } else if (typeof prev.weightKg === "number") {
+            const incKg = unit === "lb" ? 5 * 0.45359237 : 2.5;
+            const newKg = prev.weightKg + incKg;
+            const newWeight = fromKg(newKg, unit);
+            suggestedReps = targetRange?.[0] ?? set.reps;
+            suggestedWeight = roundDisplayUnit(newWeight, unit);
+          }
+        }
+
+        return {
+          ...set,
+          suggestedReps,
+          suggestedWeight,
+        };
+      });
+
+      return {
+        ...exercise,
+        sets: newSets,
+      };
+    });
+}
 
   // Session helpers
   function startSession(day: number | string | undefined | null) {
@@ -475,6 +566,7 @@ export default function DancerSplitTracker() {
         const name = s.split(":")[0];
         const parsed = parseSetsAndReps(s);
         const restSec = extractRestSeconds(s);
+
         if (parsed.timed) {
           return {
             name,
@@ -484,35 +576,48 @@ export default function DancerSplitTracker() {
             sets: [{ reps: "", weight: "" }],
           };
         }
-        // Progressive Overload defaults
-        const prev = lastEntryFor(workouts, name);
-        let nextReps = parsed.reps as number;
+
+        const [repLow, repHigh] = extractRepRangeFromName(s); // e.g., 8–12
+        let nextReps = repLow;
         let nextWeightUnit: number | "" = "";
 
-        // If we have a previous entry, prefer +weight; if no weight, try +1 rep
-        if (prev) {
-          // prev.reps is stored per set entry; use it as a hint for reps
-          nextReps = Math.max(parsed.reps as number, (prev.reps ?? parsed.reps as number) + 1);
+        const prev = lastEntryFor(workouts, name); // ✅ This was missing
 
-          if (typeof prev.weightKg === "number") {
-            // suggest +2.5kg or +5lb (stored in kg but session UI uses the selected unit)
-            const incKg = PO_INCR[unit] === 5 ? 5 * KG_PER_LB : 2.5; // if unit lb → 5 lb in kg; if kg → 2.5 kg
-            const suggestedKg = prev.weightKg + incKg;
-            const asUnit = fromKg(suggestedKg, unit);
-            nextWeightUnit = roundDisplayUnit(asUnit, unit);
+        if (prev) {
+          const prevReps = prev.reps ?? repLow;
+          const prevWeightKg = prev.weightKg;
+
+          if (repHigh && prevReps >= repHigh) {
+            // REACHED MAX REPS → add weight
+            if (typeof prevWeightKg === "number") {
+              const incKg = PO_INCR[unit] === 5 ? 5 * KG_PER_LB : 2.5;
+              const suggestedKg = prevWeightKg + incKg;
+              const asUnit = fromKg(suggestedKg, unit);
+              nextWeightUnit = roundDisplayUnit(asUnit, unit);
+            }
+            nextReps = repLow; // reset reps to bottom
+          } else {
+            // NOT YET AT MAX REPS → +1 rep, same weight
+            nextReps = prevReps + 1;
+            if (typeof prevWeightKg === "number") {
+              const asUnit = fromKg(prevWeightKg, unit);
+              nextWeightUnit = roundDisplayUnit(asUnit, unit);
+            }
           }
         }
 
         // Build sets with suggested reps/weight prefilled
         const setsArr = Array.from({ length: parsed.sets }, () => ({
           reps: nextReps,
-          weight: nextWeightUnit, // stays in UI unit; you already convert to kg on save
+          weight: nextWeightUnit,
         }));
+
         return { name, sets: setsArr, restSec };
       });
 
-    if (plan.length === 0) return;
 
+    if (plan.length === 0) return;
+  
     setSessionPlan(plan as any);
     setSessionIdx(0);
     setCurrentSetIdx(0);
@@ -521,7 +626,8 @@ export default function DancerSplitTracker() {
     setSessionActive(true);
     setActiveTopTab("track");
   }
-
+  
+  
   function finishSessionAndSave() {
     const entries: WorkoutEntry[] = [];
 
@@ -1132,49 +1238,63 @@ export default function DancerSplitTracker() {
                               >
                                 <td className="py-2 pr-4">{j + 1}</td>
                                 <td className="py-2 pr-4">
-                                  <Input
-                                    inputMode="numeric"
-                                    value={String(s.reps)}
-                                    onChange={(e) => {
-                                      const v = e.target.value;
-                                      setSessionPlan(prev =>
-                                        prev.map((ex, i) =>
-                                          i === sessionIdx
-                                            ? {
-                                                ...ex,
-                                                sets: ex.sets.map((x, k) =>
-                                                  k === j ? { ...x, reps: v.trim() === "" ? "" : Number(v) } : x
-                                                ),
-                                              }
-                                            : ex
-                                        )
-                                      );
-                                    }}
-
-                                  />
+                                  <div className="relative">
+                                    <Input
+                                      inputMode="numeric"
+                                      value={String(s.reps)}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        setSessionPlan(prev =>
+                                          prev.map((ex, i) =>
+                                            i === sessionIdx
+                                              ? {
+                                                  ...ex,
+                                                  sets: ex.sets.map((x, k) =>
+                                                    k === j ? { ...x, reps: v.trim() === "" ? "" : Number(v) } : x
+                                                  ),
+                                                }
+                                              : ex
+                                          )
+                                        );
+                                      }}
+                                    />
+                                    {s.suggestedReps !== undefined && s.reps === "" && (
+                                      <div className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs italic">
+                                        {s.suggestedReps}
+                                      </div>
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="py-2 pr-4">
-                                  <Input
-                                    inputMode="numeric"
-                                    value={s.weight === "" ? "" : String(s.weight)}
-                                    onChange={(e) => {
-                                      const v = e.target.value;
-                                      setSessionPlan(prev =>
-                                        prev.map((ex, i) =>
-                                          i === sessionIdx
-                                            ? {
-                                                ...ex,
-                                                sets: ex.sets.map((x, k) =>
-                                                  k === j ? { ...x, weight: v.trim() === "" ? "" : Number(v) } : x
-                                                ),
-                                              }
-                                            : ex
-                                        )
-                                      );
-                                    }}
-                                    placeholder={unit === "kg" ? "40" : "90"}
-                                  />
+                                  <div className="relative">
+                                    <Input
+                                      inputMode="numeric"
+                                      value={s.weight === "" ? "" : String(s.weight)}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        setSessionPlan(prev =>
+                                          prev.map((ex, i) =>
+                                            i === sessionIdx
+                                              ? {
+                                                  ...ex,
+                                                  sets: ex.sets.map((x, k) =>
+                                                    k === j ? { ...x, weight: v.trim() === "" ? "" : Number(v) } : x
+                                                  ),
+                                                }
+                                              : ex
+                                          )
+                                        );
+                                      }}
+                                      placeholder={unit === "kg" ? "40" : "90"}
+                                    />
+                                    {s.suggestedWeight !== undefined && s.weight === "" && (
+                                      <div className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs italic pointer-events-none">
+                                        {s.suggestedWeight}
+                                      </div>
+                                    )}
+                                  </div>
                                 </td>
+
                               </tr>
                             ))}
                           </tbody>

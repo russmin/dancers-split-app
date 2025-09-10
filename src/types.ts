@@ -11,16 +11,21 @@ export interface WorkoutEntry {
   isPRMaxWeight?: boolean;
   isPRVolume?: boolean;
 }
+export interface SetEntry {
+  reps: number | "";
+  weight: number | "";
+  suggestedReps?: number;
+  suggestedWeight?: number;
+}
 
 export interface SessionExercise {
   name: string;
-  mode: Exclude<WorkoutMode, "circuit">; // "standard" | "timed"
-  // standard
-  sets?: { reps: number | ""; weight: number | "" }[];
-  // timed
-  seconds?: number | "";                // work seconds
-  restSec?: number;                     // suggested rest btw sets/exercises
+  mode: Exclude<WorkoutMode, "circuit">;
+  sets?: SetEntry[];
+  seconds?: number | "";
+  restSec?: number;
 }
+
 
 export interface CircuitSpec {
   mode: "circuit";
