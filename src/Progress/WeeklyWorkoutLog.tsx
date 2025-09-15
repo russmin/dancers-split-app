@@ -4,6 +4,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { WorkoutEntry } from "@/components/WorkoutLogTable";
 
 
+
 interface Props {
   workouts: WorkoutEntry[];
   unit: "kg" | "lb";
@@ -29,7 +30,7 @@ export default function WeeklyWorkoutLog({ workouts, unit }: Props) {
   const grouped = useMemo(() => groupByWeek(workouts), [workouts]);
   const weekKeys = Object.keys(grouped).sort((a, b) => b.localeCompare(a)); // newest first
   const [activeWeek, setActiveWeek] = useState<string>(weekKeys[0]);
-
+  
   const display = grouped[activeWeek] ?? [];
 
   return (

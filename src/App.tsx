@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
-
+import ProgressChart from "./Progress/ProgressChart";
 import ProfileTab from "@/components/ProfileTab";
 import PlanTab from "@/components/PlanTab";
+import ProgressTab from "./Progress/ProgressTab";
 import CircuitRunner, { type CircuitSpec } from "@/components/CircuitRunner";
 import WeeklyWorkoutLog from "@/Progress/WeeklyWorkoutLog";
 
@@ -92,6 +93,59 @@ function extractRepRangeFromName(name: string): [number, number] {
   }
   return [10, 12]; // default range
 }
+function getISOWeekString(dateStr: string) {
+  const date = new Date(dateStr);
+  const tempDate = new Date(date.getTime());
+  tempDate.setHours(0, 0, 0, 0);
+  // Set to nearest Thursday: current date + 4 - current day number
+  tempDate.setDate(tempDate.getDate() + 4 - (tempDate.getDay() || 7));
+  const yearStart = new Date(tempDate.getFullYear(), 0, 1);
+  const weekNo = Math.ceil((((tempDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${tempDate.getFullYear()}-W${weekNo.toString().padStart(2, "0")}`;
+}
+interface WeeklyPR {
+  week: string;
+  weight: number;
+  reps: number;
+}
+
+function aggregatePRsByWeek(workouts: WorkoutEntry[]): Record<string, WeeklyPR[]> {
+  const byWeek: Record<string, Record<string, WeeklyPR>> = {};
+
+  for (const entry of workouts) {
+    const week = getISOWeekString(entry.date);
+    const exercise = entry.name;
+    const weight = entry.weightKg ?? 0;
+    const reps = entry.reps ?? 0;
+
+    if (!byWeek[week]) byWeek[week] = {};
+    if (!byWeek[week][exercise]) {
+      byWeek[week][exercise] = { week, weight, reps };
+    } else {
+      const existing = byWeek[week][exercise];
+      if (weight > existing.weight || (weight === existing.weight && reps > existing.reps)) {
+        byWeek[week][exercise] = { week, weight, reps };
+      }
+    }
+  }
+
+  // Transform into: { "Bench Press": [ {week, weight, reps}, ... ] }
+  const result: Record<string, WeeklyPR[]> = {};
+  for (const week in byWeek) {
+    for (const exercise in byWeek[week]) {
+      if (!result[exercise]) result[exercise] = [];
+      result[exercise].push(byWeek[week][exercise]);
+    }
+  }
+
+  // Sort each exercise’s PRs by week
+  for (const ex in result) {
+    result[ex].sort((a, b) => a.week.localeCompare(b.week));
+  }
+
+  return result;
+}
+
 /** Return the most recent non-timed entry for the exact exercise name */
 function lastEntryFor(workouts: WorkoutEntry[], name: string): WorkoutEntry | undefined {
   // your list is newest-first after saves, but be safe and sort by date desc then by array order
@@ -457,17 +511,7 @@ export default function DancerSplitTracker() {
     () => Array.from(new Set(workouts.map((w) => w.name))).sort(),
     [workouts]
   );
-  const dailyData = useMemo(() => {
-    const map = new Map<string, { date: string; volume: number }>();
-    for (const w of workouts) {
-      if (exerciseFilter !== "__all" && w.name !== exerciseFilter) continue;
-      const volume = w.sets * w.reps * (w.weightKg ?? 1);
-      const k = w.date;
-      if (!map.has(k)) map.set(k, { date: k, volume: 0 });
-      map.get(k)!.volume += volume;
-    }
-    return Array.from(map.values()).sort((a, b) => (a.date < b.date ? -1 : 1));
-  }, [workouts, exerciseFilter]);
+
 
   const completedDates = useMemo(() => {
     const s = new Set<string>();
@@ -762,7 +806,6 @@ export default function DancerSplitTracker() {
     // You can also set default sets to 1 if you prefer
     if (wSets === "" || wSets === "3") setWSets("1");
   }, [wName, unit, workouts]); // deps
-
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-slate-50 to-white text-slate-900 p-4 md:p-8">
       <div className="mx-auto max-w-6xl space-y-6">
@@ -1524,59 +1567,13 @@ export default function DancerSplitTracker() {
 
           {/* PROGRESS TAB */}
           <TabsContent value="progress">
-            <Card className="rounded-2xl shadow-sm mb-6">
-              <CardHeader className="pb-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <CardTitle className="text-lg">Progress (Daily Volume)</CardTitle>
-                <div className="flex items-center gap-2 text-sm">
-                  <Label className="mr-1">Exercise</Label>
-                  <Select value={exerciseFilter} onValueChange={(v) => setExerciseFilter(v)}>
-                    <SelectTrigger className="w-[180px]">
-                      <SelectValue placeholder="All exercises" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__all">All exercises</SelectItem>
-                      {uniqueExercises.map((n) => (
-                        <SelectItem key={n} value={n}>
-                          {n}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="h-64 w-full">
-                  {dailyData.length === 0 ? (
-                    <div className="h-full grid place-items-center text-sm text-slate-500">
-                      No data yet — add a workout to see progress.
-                    </div>
-                  ) : (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={dailyData} margin={{ left: 8, right: 8, top: 8, bottom: 8 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                        <YAxis tick={{ fontSize: 12 }} />
-                        <Tooltip
-                          formatter={(value: any) => [
-                            unit === "kg"
-                              ? value
-                              : Math.round(fromKg(Number(value), unit) * 10) / 10,
-                            unit === "kg" ? "Volume (kg×reps)" : "Volume (lb×reps)",
-                          ]}
-                          labelClassName="text-xs"
-                        />
-                        <Line type="monotone" dataKey="volume" dot={false} strokeWidth={2} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  )}
-                </div>
-                <p className="text-xs text-slate-500 mt-2">
-                  Volume = sets × reps × weight ({unit}); entries without weight count as 1 per rep.
-                </p>
-              </CardContent>
-            </Card>
-
-            <WeeklyWorkoutLog workouts={workouts} unit={unit} />
+            <ProgressTab
+              workouts={workouts}
+              unit={unit}
+              exerciseFilter={exerciseFilter}
+              setExerciseFilter={setExerciseFilter}
+              uniqueExercises={uniqueExercises}
+            />
           </TabsContent>
         </Tabs>
 

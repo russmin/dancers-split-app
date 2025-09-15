@@ -62,13 +62,17 @@ export default function CircuitRunner({
   const [remaining, setRemaining] = React.useState<number>(circuit.stations[0]?.seconds ?? 45);
   const [running, setRunning] = React.useState<boolean>(false);
 
+  const [finished, setFinished] = React.useState(false);
+  const [editableEntries, setEditableEntries] = React.useState<WorkoutEntry[]>([]);
+
   const totalStations = circuit.stations.length;
+  const entriesRef = React.useRef<WorkoutEntry[]>([]);
+
   const stationSeconds = phase === "work"
     ? (circuit.stations[stationIndex]?.seconds ?? 45)
     : (stationIndex === totalStations ? (circuit.roundRestSec ?? 0) : circuit.stationRestSec);
 
   const last5 = remaining <= 5 && running;
-  const entriesRef = React.useRef<WorkoutEntry[]>([]);
 
   React.useEffect(() => {
     if (!running) return;
@@ -77,6 +81,7 @@ export default function CircuitRunner({
         if (r <= 1) {
           clearInterval(id);
           beep();
+
           if (phase === "work") {
             const st = circuit.stations[stationIndex];
             entriesRef.current.push({
@@ -86,6 +91,7 @@ export default function CircuitRunner({
               sets: 1,
               reps: st.seconds,
             });
+
             if (circuit.stationRestSec > 0 && stationIndex < totalStations - 1) {
               setPhase("rest");
               setRemaining(circuit.stationRestSec);
@@ -101,14 +107,13 @@ export default function CircuitRunner({
       });
     }, 1000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, phase, stationIndex, round]);
 
   function advanceToNext() {
-    const lastStation = stationIndex >= totalStations - 1;
-    const lastRound = round >= circuit.rounds;
+    const isLastStation = stationIndex >= totalStations - 1;
+    const isLastRound = round >= circuit.rounds;
 
-    if (!lastStation) {
+    if (!isLastStation) {
       const nextIdx = stationIndex + 1;
       setStationIndex(nextIdx);
       setPhase("work");
@@ -116,15 +121,11 @@ export default function CircuitRunner({
       return;
     }
 
-    // If we're done with a round, but not all rounds
-    if (!lastRound) {
+    if (!isLastRound) {
       const nextRound = round + 1;
-
       if (circuit.roundRestSec && circuit.roundRestSec > 0) {
         setPhase("rest");
         setRemaining(circuit.roundRestSec);
-
-        // After the round rest, go to next round
         setTimeout(() => {
           setRound(nextRound);
           setStationIndex(0);
@@ -140,17 +141,19 @@ export default function CircuitRunner({
       return;
     }
 
-    // Last station of last round = complete
-    onFinish([...entriesRef.current]);
+    // Final round complete
+    setEditableEntries([...entriesRef.current]);
+    setFinished(true);
     setRunning(false);
-}
-
+  }
 
   const currentLabel = phase === "work" ? (circuit.stations[stationIndex]?.label ?? "—") : "Rest";
+  const stationProgress = stationSeconds > 0 ? (1 - remaining / stationSeconds) : 0;
+  const roundProgress = (
+    (round - 1) * totalStations +
+    (phase === "work" ? stationIndex : Math.min(stationIndex + 0.5, totalStations))
+  ) / (circuit.rounds * totalStations);
 
-  const stationProgress =
-    stationSeconds > 0 ? (1 - remaining / stationSeconds) : 0; // 0..1
-  const roundProgress = ( (round - 1) * totalStations + (phase === "work" ? stationIndex : Math.min(stationIndex + 0.5, totalStations)) ) / (circuit.rounds * totalStations);
   const nextStationLabel =
     phase === "rest" && stationIndex < totalStations - 1
       ? circuit.stations[stationIndex + 1]?.label
@@ -170,9 +173,10 @@ export default function CircuitRunner({
       <CardHeader>
         <CardTitle className="text-lg flex items-center justify-between">
           <span>{circuit.name} — Round {round}/{circuit.rounds}</span>
-          <span className="text-xs text-slate-500">Station {stationIndex+1}/{totalStations}</span>
+          <span className="text-xs text-slate-500">Station {stationIndex + 1}/{totalStations}</span>
         </CardTitle>
       </CardHeader>
+
       <CardContent className="space-y-4">
         {/* Round progress */}
         <div className="h-1.5 w-full rounded bg-slate-100 overflow-hidden">
@@ -188,21 +192,21 @@ export default function CircuitRunner({
         </div>
 
         {/* Timer */}
-        <div
-          className={[
-            "text-5xl font-mono text-center rounded-xl px-4 py-6 border",
-            phase === "work" ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200",
-            last5 ? "animate-pulse" : ""
-          ].join(" ")}
-        >
+        <div className={[
+          "text-5xl font-mono text-center rounded-xl px-4 py-6 border",
+          phase === "work" ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200",
+          last5 ? "animate-pulse" : ""
+        ].join(" ")}>
           {fmt(remaining)}
         </div>
+
         {nextStationLabel && nextStationSeconds && (
           <div className="text-sm text-slate-600 text-center">
             🔜 Up Next: <strong>{nextStationLabel}</strong> ({nextStationSeconds}s)
           </div>
         )}
-        {/* Station progress */}
+
+        {/* Station progress bar */}
         <div className="h-2 w-full rounded bg-slate-100 overflow-hidden">
           <div
             className={`h-full transition-all ${phase === "work" ? "bg-emerald-500" : "bg-amber-500"}`}
@@ -210,6 +214,7 @@ export default function CircuitRunner({
           />
         </div>
 
+        {/* Controls */}
         <div className="flex flex-wrap items-center gap-2">
           <Button className="rounded-xl" onClick={() => setRunning(r => !r)}>
             {running ? "Pause" : "Start"}
@@ -224,6 +229,8 @@ export default function CircuitRunner({
               setPhase("work");
               setRemaining(circuit.stations[0]?.seconds ?? 45);
               entriesRef.current = [];
+              setFinished(false);
+              setEditableEntries([]);
             }}
           >
             Reset
@@ -233,6 +240,7 @@ export default function CircuitRunner({
           <Button variant="outline" className="rounded-xl" onClick={advanceToNext}>Skip ▶</Button>
         </div>
 
+        {/* Station list */}
         <div className="text-xs text-slate-600">
           Stations:{" "}
           {circuit.stations.map((s, i) => (
@@ -243,8 +251,64 @@ export default function CircuitRunner({
           {circuit.stationRestSec ? ` • Rest ${circuit.stationRestSec}s` : ""}
           {circuit.roundRestSec ? ` • Round rest ${circuit.roundRestSec}s` : ""}
         </div>
+
+        {/* Final review UI */}
+        {finished && (
+          <div className="space-y-2 mt-6">
+            <h3 className="text-base font-semibold">Finish Workout</h3>
+            <p className="text-sm text-slate-600">Review and edit any reps or weight:</p>
+
+            {editableEntries.map((entry, i) => (
+              <div key={entry.id} className="flex flex-wrap gap-2 items-center">
+                <div className="w-36 font-medium">{entry.name}</div>
+                <div className="flex gap-1 items-center">
+                  <Label className="text-xs">Reps</Label>
+                  <input
+                    type="number"
+                    className="w-16 rounded border px-1 py-0.5 text-sm"
+                    value={entry.reps}
+                    onChange={(e) => {
+                      const reps = parseInt(e.target.value) || 0;
+                      setEditableEntries((prev) =>
+                        prev.map((ent, idx) => idx === i ? { ...ent, reps } : ent)
+                      );
+                    }}
+                  />
+                </div>
+                <div className="flex gap-1 items-center">
+                  <Label className="text-xs">Weight</Label>
+                  <input
+                    type="number"
+                    className="w-20 rounded border px-1 py-0.5 text-sm"
+                    value={entry.weightKg ?? ""}
+                    onChange={(e) => {
+                      const weightKg = parseFloat(e.target.value);
+                      setEditableEntries((prev) =>
+                        prev.map((ent, idx) => idx === i ? { ...ent, weightKg } : ent)
+                      );
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+
+            <div className="flex gap-3 mt-4">
+              <Button className="rounded-xl" onClick={() => {
+                onFinish([...editableEntries]);
+                setFinished(false);
+              }}>
+                Save Workout
+              </Button>
+              <Button variant="outline" className="rounded-xl" onClick={() => {
+                setFinished(false);
+                setEditableEntries([]);
+              }}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 }
-
