@@ -418,7 +418,7 @@ export default function DancerSplitTracker() {
   // Workouts (log)
   const [workouts, setWorkouts] = useState<WorkoutEntry[]>([]);
   // state
-  
+
  
   // Manual log form
   const [wDate, setWDate] = useState<string>(todayISO());
@@ -460,6 +460,15 @@ export default function DancerSplitTracker() {
   const [timerActive, setTimerActive] = useState(false);
   const [timerRemaining, setTimerRemaining] = useState<number | null>(null);
 
+  const [roundInput, setRoundInput] = useState<string>(
+    String(sessionPlan[sessionIdx].rounds ?? 1)
+    );
+  const [repInput, setRepInput] = useState<string>(
+    String(sessionPlan[sessionIdx]?.reps ?? "")
+  );
+  const [weightInput, setWeightInput] = useState<string>(
+    String(sessionPlan[sessionIdx]?.weight ?? "")
+  );
 
   // UI state
   const [exerciseFilter, setExerciseFilter] = useState<string>("__all");
@@ -791,6 +800,7 @@ export default function DancerSplitTracker() {
     const repsEmpty = wReps === "" || wReps === "10";    // your default is "10"
     const weightEmpty = wWeight === "";                   // empty means not set
 
+
     if (repsEmpty) {
       const nextReps = Math.max(Number(wReps || 0), (prev.reps ?? 0) + 1);
       if (nextReps > 0) setWReps(String(nextReps));
@@ -909,31 +919,52 @@ export default function DancerSplitTracker() {
                         <div key={i} className="border p-3 rounded-xl bg-slate-50">
                           <Label className="block mb-1 text-sm font-semibold">{st.label}</Label>
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                            {/* Reps Input */}
                             <div>
                               <Label>Reps</Label>
                               <Input
-                                type="number"
-                                value={circuitManual[i]?.reps ?? ""}
+                                type="text"
+                                inputMode="numeric"
+                                value={
+                                  circuitManual[i]?.reps !== undefined && circuitManual[i]?.reps !== null
+                                    ? String(circuitManual[i].reps)
+                                    : ""
+                                }
                                 onChange={(e) => {
-                                  const val = Number(e.target.value);
+                                  const val = e.target.value;
                                   setCircuitManual((prev) => {
                                     const copy = [...prev];
-                                    copy[i] = { ...copy[i], reps: isNaN(val) ? "" : val };
+                                    const parsed =  Number(val);
+                                    copy[i] = {
+                                      ...copy[i],
+                                      reps: val === "" || isNaN(parsed) ? "" : parsed,
+                                    };
                                     return copy;
                                   });
                                 }}
                               />
                             </div>
+
+                            {/* Weight Input */}
                             <div>
                               <Label>Weight ({unit})</Label>
                               <Input
-                                type="number"
-                                value={circuitManual[i]?.weight ?? ""}
+                                type="text"
+                                inputMode="decimal"
+                                value={
+                                  circuitManual[i]?.weight !== undefined && circuitManual[i]?.weight !== null
+                                    ? String(circuitManual[i].weight)
+                                    : ""
+                                }
                                 onChange={(e) => {
-                                  const val = Number(e.target.value);
+                                  const val = e.target.value;
                                   setCircuitManual((prev) => {
                                     const copy = [...prev];
-                                    copy[i] = { ...copy[i], weight: isNaN(val) ? "" : val };
+                                    const parsed =  Number(val);
+                                    copy[i] = {
+                                      ...copy[i],
+                                      weight: val === "" || isNaN(parsed) ? "" : parsed,
+                                    };
                                     return copy;
                                   });
                                 }}
@@ -942,6 +973,7 @@ export default function DancerSplitTracker() {
                           </div>
                         </div>
                       ))}
+
                     </div>
 
                     <div className="flex items-center justify-between">
@@ -1200,26 +1232,41 @@ export default function DancerSplitTracker() {
                             }}
                           />
                         </div>
-
                         {/* Rounds */}
                         <div>
                           <Label>Rounds</Label>
                           <Input
                             inputMode="numeric"
-                            value={sessionPlan[sessionIdx].rounds ?? 1}
+                            type="number"
+                            min={1}
+                            value={roundInput}
                             onChange={(e) => {
                               const v = e.target.value;
-                              setSessionPlan((prev) =>
-                                prev.map((ex, i) =>
-                                  i === sessionIdx
-                                    ? { ...ex, rounds: v === "" ? 1 : Number(v) }
-                                    : ex
-                                )
-                              );
+                              setRoundInput(v);
+
+                              // Only update sessionPlan when it's a valid number
+                              const parsed = Number(v);
+                              if (!isNaN(parsed) && parsed > 0) {
+                                setSessionPlan((prev) =>
+                                  prev.map((ex, i) =>
+                                    i === sessionIdx ? { ...ex, rounds: parsed } : ex
+                                  )
+                                );
+                              }
+                            }}
+                            onBlur={() => {
+                              // If empty on blur, default to 1
+                              if (roundInput === "") {
+                                setRoundInput("1");
+                                setSessionPlan((prev) =>
+                                  prev.map((ex, i) =>
+                                    i === sessionIdx ? { ...ex, rounds: 1 } : ex
+                                  )
+                                );
+                              }
                             }}
                           />
                         </div>
-
                         {/* Spacer */}
                         <div className="self-end text-slate-500">(timed movement)</div>
 
