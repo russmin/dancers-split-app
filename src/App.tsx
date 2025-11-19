@@ -2044,7 +2044,7 @@ export default function DancerSplitTracker() {
               activePlan={activePlan}
               programStartDate={profile.programStartDate}
               preferredDays={profile.preferredDays as any}
-              daysPerWeek={profile.daysPerWeek}
+              daysPerWeek={typeof profile.daysPerWeek === "number" ? profile.daysPerWeek : undefined}
               setWorkouts={setWorkouts}
             />
           </TabsContent>
