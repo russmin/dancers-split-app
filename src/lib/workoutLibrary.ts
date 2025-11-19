@@ -133,7 +133,8 @@ export function loadExercises(): Exercise[] {
   try {
     const stored = localStorage.getItem(STORAGE_KEYS.exercises);
     return stored ? JSON.parse(stored) : [];
-  } catch {
+  } catch (error) {
+    console.error("[workoutLibrary] Error loading exercises:", error);
     return [];
   }
 }
@@ -143,12 +144,18 @@ export function loadExercises(): Exercise[] {
  */
 export function saveExercises(exercises: Exercise[]): void {
   try {
+    if (!Array.isArray(exercises)) {
+      console.error("[workoutLibrary] saveExercises called with non-array:", exercises);
+      throw new Error("exercises must be an array");
+    }
+    
     const serialized = JSON.stringify(exercises);
     localStorage.setItem(STORAGE_KEYS.exercises, serialized);
-    console.log(`[workoutLibrary] Saved ${exercises.length} exercises to localStorage`);
   } catch (error) {
     console.error("[workoutLibrary] Failed to save exercises to localStorage:", error);
-    // Re-throw to let the caller handle it
+    if (error instanceof DOMException && error.code === 22) {
+      console.error("[workoutLibrary] localStorage quota exceeded!");
+    }
     throw error;
   }
 }
@@ -160,7 +167,8 @@ export function loadWorkouts(): Workout[] {
   try {
     const stored = localStorage.getItem(STORAGE_KEYS.workouts);
     return stored ? JSON.parse(stored) : [];
-  } catch {
+  } catch (error) {
+    console.error("[workoutLibrary] Error loading workouts:", error);
     return [];
   }
 }
@@ -170,11 +178,18 @@ export function loadWorkouts(): Workout[] {
  */
 export function saveWorkouts(workouts: Workout[]): void {
   try {
+    if (!Array.isArray(workouts)) {
+      console.error("[workoutLibrary] saveWorkouts called with non-array:", workouts);
+      throw new Error("workouts must be an array");
+    }
+    
     const serialized = JSON.stringify(workouts);
     localStorage.setItem(STORAGE_KEYS.workouts, serialized);
-    console.log(`[workoutLibrary] Saved ${workouts.length} workouts to localStorage`);
   } catch (error) {
     console.error("[workoutLibrary] Failed to save workouts to localStorage:", error);
+    if (error instanceof DOMException && error.code === 22) {
+      console.error("[workoutLibrary] localStorage quota exceeded!");
+    }
     throw error;
   }
 }

@@ -377,25 +377,21 @@ export default function DancerSplitTracker() {
   // Initialize Workout Library
   useEffect(() => {
     try {
-      console.log("Initializing workout library...");
       // Load profile first to get programName
       let loadedProfile: UserProfile | null = null;
       try {
         const p = localStorage.getItem(STORAGE_KEYS.profile);
         if (p) loadedProfile = JSON.parse(p);
-        console.log("Loaded profile:", loadedProfile?.programName);
       } catch (err) {
-        console.error("Error loading profile:", err);
+        console.error("[App] Error loading profile:", err);
       }
 
       let loadedExercises = loadExercises();
       let loadedWorkouts = loadWorkouts();
       let loadedPlans = loadPlans();
-      console.log("Loaded:", { exercises: loadedExercises.length, workouts: loadedWorkouts.length, plans: loadedPlans.length });
 
       // Initialize with defaults if empty
       if (loadedExercises.length === 0) {
-        console.log("Initializing default library...");
         try {
           const { exercises: defaultExercises, workouts: defaultWorkouts, plan } = initializeLibrary();
           loadedExercises = defaultExercises;
@@ -404,7 +400,6 @@ export default function DancerSplitTracker() {
           saveExercises(loadedExercises);
           saveWorkouts(loadedWorkouts);
           savePlans(loadedPlans);
-          console.log("Default library initialized:", { exercises: loadedExercises.length, workouts: loadedWorkouts.length });
         } catch (err) {
           console.error("Error initializing library:", err);
           throw err; // Re-throw to be caught by outer catch
@@ -418,7 +413,6 @@ export default function DancerSplitTracker() {
       // Load or set active plan - use loaded profile's programName or default
       const programName = loadedProfile?.programName || profile.programName || "Final 4-Day Dancer's Split";
       const plan = loadedPlans.find(p => p.name === programName) || loadedPlans[0] || null;
-      console.log("Selected plan:", plan?.name);
       setActivePlan(plan);
 
       // Convert to legacy format for backwards compatibility
@@ -427,12 +421,9 @@ export default function DancerSplitTracker() {
           const populatedPlan = populatePlanDays(plan, loadedWorkouts, loadedExercises);
           const legacyPlan = planToLegacyFormat(populatedPlan, loadedWorkouts, loadedExercises);
           setDancerSplit(legacyPlan);
-          console.log("Converted plan to legacy format:", legacyPlan.length, "days");
         } catch (err) {
           console.error("Error converting plan to legacy format:", err);
         }
-      } else {
-        console.warn("Cannot convert plan - missing data:", { plan: !!plan, exercises: loadedExercises.length, workouts: loadedWorkouts.length });
       }
     } catch (err) {
       console.error("Error initializing workout library:", err);
@@ -1810,13 +1801,10 @@ export default function DancerSplitTracker() {
                                   const updatedExercises = [...currentExercises, newExercise];
                                   setExercises(updatedExercises);
                                   saveExercises(updatedExercises);
-                                  console.log(`[App] Added exercise to library: ${name} (total: ${updatedExercises.length})`);
                                 } catch (error) {
                                   console.error("[App] Failed to save exercise to library:", error);
                                   alert(`Failed to save exercise to library: ${error instanceof Error ? error.message : String(error)}`);
                                 }
-                              } else {
-                                console.log(`[App] Exercise "${name}" already exists in library, skipping add.`);
                               }
                             }
 
@@ -1886,13 +1874,10 @@ export default function DancerSplitTracker() {
                                   const updatedExercises = [...currentExercises, newExercise];
                                   setExercises(updatedExercises);
                                   saveExercises(updatedExercises);
-                                  console.log(`[App] Added exercise to library: ${name} (total: ${updatedExercises.length})`);
                                 } catch (error) {
                                   console.error("[App] Failed to save exercise to library:", error);
                                   alert(`Failed to save exercise to library: ${error instanceof Error ? error.message : String(error)}`);
                                 }
-                              } else {
-                                console.log(`[App] Exercise "${name}" already exists in library, skipping add.`);
                               }
                             }
 
@@ -2015,15 +2000,19 @@ export default function DancerSplitTracker() {
                   try {
                     setExercises(ex);
                     saveExercises(ex);
-                    console.log(`[App] Updated exercises library: ${ex.length} exercises`);
                   } catch (error) {
                     console.error("[App] Failed to update exercises library:", error);
-                    alert("Failed to save exercises. Please check console for details.");
+                    alert(`Failed to save exercises: ${error}`);
                   }
                 }}
                 onUpdateWorkouts={(w) => {
-                  setWorkoutLibrary(w);
-                  saveWorkouts(w);
+                  try {
+                    setWorkoutLibrary(w);
+                    saveWorkouts(w);
+                  } catch (error) {
+                    console.error("[App] Failed to update workouts library:", error);
+                    alert(`Failed to save workouts. Please check console for details.`);
+                  }
                 }}
                 onUpdatePlans={(p) => {
                   setPlans(p);

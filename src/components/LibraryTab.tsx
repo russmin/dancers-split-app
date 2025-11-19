@@ -80,14 +80,30 @@ export default function LibraryTab({
   }
 
   function handleSaveExercise(exercise: Exercise) {
-    if (!exercise.name.trim()) return;
+    if (!exercise.name?.trim()) {
+      alert("Please enter an exercise name");
+      return;
+    }
 
-    const updated = editingExercise?.id
+    // Check if this exercise already exists in the array
+    const exerciseExists = exercises.some(e => e.id === exercise.id);
+    
+    const updated = exerciseExists
       ? exercises.map((e) => (e.id === exercise.id ? exercise : e))
       : [...exercises, exercise];
-
-    onUpdateExercises(updated);
-    setEditingExercise(null);
+    
+    if (!onUpdateExercises) {
+      console.error("[LibraryTab] ERROR: onUpdateExercises is not defined!");
+      return;
+    }
+    
+    try {
+      onUpdateExercises(updated);
+      setEditingExercise(null);
+    } catch (error) {
+      console.error("[LibraryTab] Error calling onUpdateExercises:", error);
+      alert(`Error saving exercise: ${error}`);
+    }
   }
 
   function handleDeleteExercise(id: string) {
@@ -110,14 +126,29 @@ export default function LibraryTab({
   }
 
   function handleSaveWorkout(workout: Workout) {
-    if (!workout.name.trim()) return;
-
-    const updated = editingWorkout?.id
+    if (!workout.name?.trim()) {
+      alert("Please enter a workout name");
+      return;
+    }
+    
+    // Check if this workout already exists in the array
+    const workoutExists = workouts.some(w => w.id === workout.id);
+    
+    const updated = workoutExists
       ? workouts.map((w) => (w.id === workout.id ? { ...workout, updated: new Date().toISOString() } : w))
       : [...workouts, workout];
-
-    onUpdateWorkouts(updated);
-    setEditingWorkout(null);
+    
+    if (!onUpdateWorkouts) {
+      console.error("[LibraryTab] ERROR: onUpdateWorkouts is not defined!");
+      return;
+    }
+    
+    try {
+      onUpdateWorkouts(updated);
+      setEditingWorkout(null);
+    } catch (error) {
+      console.error("[LibraryTab] Error calling onUpdateWorkouts:", error);
+    }
   }
 
   function handleDeleteWorkout(id: string) {
@@ -756,7 +787,13 @@ function ExerciseEditor({
           <Button variant="outline" onClick={onCancel} className="rounded-xl">
             Cancel
           </Button>
-          <Button onClick={() => onSave(state)} className="rounded-xl">
+          <Button onClick={() => {
+            if (!state.name?.trim()) {
+              alert("Please enter an exercise name");
+              return;
+            }
+            onSave(state);
+          }} className="rounded-xl">
             Save
           </Button>
         </DialogFooter>
@@ -1292,7 +1329,13 @@ function WorkoutEditor({
         </div>
 
         <div className="flex gap-2 pt-4 border-t">
-          <Button onClick={() => onSave(state)} className="rounded-xl">
+          <Button onClick={() => {
+            if (!state.name?.trim()) {
+              alert("Please enter a workout name");
+              return;
+            }
+            onSave(state);
+          }} className="rounded-xl">
             Save Workout
           </Button>
           <Button variant="outline" onClick={onCancel} className="rounded-xl">
