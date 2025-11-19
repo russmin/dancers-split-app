@@ -142,7 +142,15 @@ export function loadExercises(): Exercise[] {
  * Save exercises to localStorage
  */
 export function saveExercises(exercises: Exercise[]): void {
-  localStorage.setItem(STORAGE_KEYS.exercises, JSON.stringify(exercises));
+  try {
+    const serialized = JSON.stringify(exercises);
+    localStorage.setItem(STORAGE_KEYS.exercises, serialized);
+    console.log(`[workoutLibrary] Saved ${exercises.length} exercises to localStorage`);
+  } catch (error) {
+    console.error("[workoutLibrary] Failed to save exercises to localStorage:", error);
+    // Re-throw to let the caller handle it
+    throw error;
+  }
 }
 
 /**
@@ -161,7 +169,14 @@ export function loadWorkouts(): Workout[] {
  * Save workouts to localStorage
  */
 export function saveWorkouts(workouts: Workout[]): void {
-  localStorage.setItem(STORAGE_KEYS.workouts, JSON.stringify(workouts));
+  try {
+    const serialized = JSON.stringify(workouts);
+    localStorage.setItem(STORAGE_KEYS.workouts, serialized);
+    console.log(`[workoutLibrary] Saved ${workouts.length} workouts to localStorage`);
+  } catch (error) {
+    console.error("[workoutLibrary] Failed to save workouts to localStorage:", error);
+    throw error;
+  }
 }
 
 /**
@@ -180,7 +195,14 @@ export function loadPlans(): WorkoutPlan[] {
  * Save workout plans to localStorage
  */
 export function savePlans(plans: WorkoutPlan[]): void {
-  localStorage.setItem(STORAGE_KEYS.plans, JSON.stringify(plans));
+  try {
+    const serialized = JSON.stringify(plans);
+    localStorage.setItem(STORAGE_KEYS.plans, serialized);
+    console.log(`[workoutLibrary] Saved ${plans.length} plans to localStorage`);
+  } catch (error) {
+    console.error("[workoutLibrary] Failed to save plans to localStorage:", error);
+    throw error;
+  }
 }
 
 /**

@@ -1,14 +1,17 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, Suspense, lazy } from "react";
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import ProgressChart from "./Progress/ProgressChart";
 import ProfileTab from "@/components/ProfileTab";
 import PlanTab from "@/components/PlanTab";
-import ProgressTab from "./Progress/ProgressTab";
 import CircuitRunner, { type CircuitSpec } from "@/components/CircuitRunner";
 import WeeklyWorkoutLog from "@/Progress/WeeklyWorkoutLog";
-import LibraryTab from "@/components/LibraryTab";
 import WorkoutPreview from "@/components/WorkoutPreview";
+import RestTimer from "@/components/TrackSession/RestTimer";
+
+// Lazy load large tab components
+const ProgressTab = lazy(() => import("./Progress/ProgressTab"));
+const LibraryTab = lazy(() => import("@/components/LibraryTab"));
 
 import { markPRsBeforeInsert } from "@/lib/pr";
 // If you keep a manual-log picker you can re-enable this import.
@@ -269,96 +272,6 @@ function getLastWorkoutFor(name: string, logs: WorkoutEntry[]) {
 /* --------------------------------------------
    Rest Timer (for sets/reps flow)
 ---------------------------------------------*/
-function RestTimer({
-  seconds = 90,
-  startSignal = 0,
-  onDone,
-}: {
-  seconds?: number;
-  startSignal?: number;
-  onDone?: () => void;
-}) {
-  const [remaining, setRemaining] = React.useState<number>(seconds);
-  const [running, setRunning] = React.useState<boolean>(false);
-
-  React.useEffect(() => {
-    setRemaining(seconds);
-    setRunning(true);
-  }, [startSignal, seconds]);
-
-  React.useEffect(() => {
-    if (!running) return;
-    const id = setInterval(() => {
-      setRemaining((prev) => {
-        if (prev <= 1) {
-          clearInterval(id);
-          setRunning(false);
-
-          // --- HAPTIC (mobile-safe no-op on desktop)
-          try {
-            if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-              // light buzz
-              (navigator as any).vibrate?.(150);
-            }
-          } catch {}
-
-          // --- BEEP (very short)
-          try {
-            const AudioCtx =
-              (window as any).AudioContext || (window as any).webkitAudioContext;
-            if (AudioCtx) {
-              const ctx = new AudioCtx();
-              const osc = ctx.createOscillator();
-              const gain = ctx.createGain();
-              osc.connect(gain);
-              gain.connect(ctx.destination);
-              osc.frequency.value = 880;   // A5-ish
-              gain.gain.value = 0.04;      // quiet
-              osc.start();
-              setTimeout(() => {
-                osc.stop();
-                ctx.close?.();
-              }, 180);
-            }
-          } catch {}
-
-          onDone?.();          // advance your flow
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [running, onDone]);
-
-  function fmt(s: number) {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${sec.toString().padStart(2, "0")}`;
-  }
-
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      <div className="font-mono">{fmt(remaining)}</div>
-      <Button size="sm" variant="outline" className="rounded-xl" onClick={() => setRunning((r) => !r)}>
-        {running ? "Pause" : "Start"}
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        className="rounded-xl"
-        onClick={() => {
-          setRunning(false);
-          setRemaining(seconds);
-        }}
-      >
-        Reset
-      </Button>
-    </div>
-  );
-}
-
-
 /* --------------------------------------------
    Main Component
 ---------------------------------------------*/
@@ -1877,20 +1790,34 @@ export default function DancerSplitTracker() {
                             if (!Number.isFinite(secs) || secs <= 0) return alert("Enter seconds > 0");
                             
                             // If open entry, add exercise to library
-                            if (wOpenEntry && !exercises.some((e) => e.name.toLowerCase() === name.toLowerCase())) {
-                              const newExercise: Exercise = {
-                                id: uid(),
-                                name,
-                                category: "other",
-                                muscleGroups: [],
-                                isTimed: true,
-                                defaultSeconds: secs,
-                                defaultSets: 1,
-                                defaultRestSec: 60,
-                              };
-                              const updatedExercises = [...exercises, newExercise];
-                              setExercises(updatedExercises);
-                              saveExercises(updatedExercises);
+                            if (wOpenEntry) {
+                              const normalizedName = name.toLowerCase().trim();
+                              const exerciseExists = Array.isArray(exercises) && exercises.some((e) => e.name?.toLowerCase() === normalizedName);
+                              
+                              if (!exerciseExists) {
+                                try {
+                                  const newExercise: Exercise = {
+                                    id: uid(),
+                                    name: name.trim(),
+                                    category: "other",
+                                    muscleGroups: [],
+                                    isTimed: true,
+                                    defaultSeconds: secs,
+                                    defaultSets: 1,
+                                    defaultRestSec: 60,
+                                  };
+                                  const currentExercises = Array.isArray(exercises) ? exercises : [];
+                                  const updatedExercises = [...currentExercises, newExercise];
+                                  setExercises(updatedExercises);
+                                  saveExercises(updatedExercises);
+                                  console.log(`[App] Added exercise to library: ${name} (total: ${updatedExercises.length})`);
+                                } catch (error) {
+                                  console.error("[App] Failed to save exercise to library:", error);
+                                  alert(`Failed to save exercise to library: ${error instanceof Error ? error.message : String(error)}`);
+                                }
+                              } else {
+                                console.log(`[App] Exercise "${name}" already exists in library, skipping add.`);
+                              }
                             }
 
                             const entry: WorkoutEntry = {
@@ -1937,22 +1864,36 @@ export default function DancerSplitTracker() {
                             if (rawWeight !== undefined && (!Number.isFinite(rawWeight) || rawWeight < 0)) return alert("Weight ≥ 0");
                             
                             // If open entry, add exercise to library
-                            if (wOpenEntry && !exercises.some((e) => e.name.toLowerCase() === name.toLowerCase())) {
-                              // Extract rep range if sets > 1 (use reps as both min and max, or allow user to specify)
-                              const repRange: [number, number] = [reps, reps];
-                              const newExercise: Exercise = {
-                                id: uid(),
-                                name,
-                                category: "strength",
-                                muscleGroups: [],
-                                defaultRepRange: repRange,
-                                defaultSets: sets,
-                                defaultRestSec: 90,
-                                isTimed: false,
-                              };
-                              const updatedExercises = [...exercises, newExercise];
-                              setExercises(updatedExercises);
-                              saveExercises(updatedExercises);
+                            if (wOpenEntry) {
+                              const normalizedName = name.toLowerCase().trim();
+                              const exerciseExists = Array.isArray(exercises) && exercises.some((e) => e.name?.toLowerCase() === normalizedName);
+                              
+                              if (!exerciseExists) {
+                                try {
+                                  // Extract rep range if sets > 1 (use reps as both min and max, or allow user to specify)
+                                  const repRange: [number, number] = [reps, reps];
+                                  const newExercise: Exercise = {
+                                    id: uid(),
+                                    name: name.trim(),
+                                    category: "strength",
+                                    muscleGroups: [],
+                                    defaultRepRange: repRange,
+                                    defaultSets: sets,
+                                    defaultRestSec: 90,
+                                    isTimed: false,
+                                  };
+                                  const currentExercises = Array.isArray(exercises) ? exercises : [];
+                                  const updatedExercises = [...currentExercises, newExercise];
+                                  setExercises(updatedExercises);
+                                  saveExercises(updatedExercises);
+                                  console.log(`[App] Added exercise to library: ${name} (total: ${updatedExercises.length})`);
+                                } catch (error) {
+                                  console.error("[App] Failed to save exercise to library:", error);
+                                  alert(`Failed to save exercise to library: ${error instanceof Error ? error.message : String(error)}`);
+                                }
+                              } else {
+                                console.log(`[App] Exercise "${name}" already exists in library, skipping add.`);
+                              }
                             }
 
                             const entry: WorkoutEntry = {
@@ -2035,42 +1976,64 @@ export default function DancerSplitTracker() {
 
           {/* PROGRESS TAB */}
           <TabsContent value="progress">
-            <ProgressTab
-              workouts={workouts}
-              unit={unit}
-              exerciseFilter={exerciseFilter}
-              setExerciseFilter={setExerciseFilter}
-              uniqueExercises={uniqueExercises}
-              activePlan={activePlan}
-              programStartDate={profile.programStartDate}
-              preferredDays={profile.preferredDays as any}
-              daysPerWeek={typeof profile.daysPerWeek === "number" ? profile.daysPerWeek : undefined}
-              setWorkouts={setWorkouts}
-            />
+            <Suspense fallback={
+              <Card className="rounded-2xl shadow-sm">
+                <CardContent className="p-6 text-center text-slate-600">
+                  <p>Loading progress data...</p>
+                </CardContent>
+              </Card>
+            }>
+              <ProgressTab
+                workouts={workouts}
+                unit={unit}
+                exerciseFilter={exerciseFilter}
+                setExerciseFilter={setExerciseFilter}
+                uniqueExercises={uniqueExercises}
+                activePlan={activePlan}
+                programStartDate={profile.programStartDate}
+                preferredDays={profile.preferredDays as any}
+                daysPerWeek={typeof profile.daysPerWeek === "number" ? profile.daysPerWeek : undefined}
+                setWorkouts={setWorkouts}
+              />
+            </Suspense>
           </TabsContent>
 
           {/* LIBRARY TAB */}
           <TabsContent value="library">
-            <LibraryTab
-              exercises={exercises}
-              workouts={workoutLibrary}
-              plans={plans}
-              onUpdateExercises={(ex) => {
-                setExercises(ex);
-                saveExercises(ex);
-              }}
-              onUpdateWorkouts={(w) => {
-                setWorkoutLibrary(w);
-                saveWorkouts(w);
-              }}
-              onUpdatePlans={(p) => {
-                setPlans(p);
-                savePlans(p);
-              }}
-              onSelectPlan={(plan) => {
-                setActivePlan(plan);
-              }}
-            />
+            <Suspense fallback={
+              <Card className="rounded-2xl shadow-sm">
+                <CardContent className="p-6 text-center text-slate-600">
+                  <p>Loading library...</p>
+                </CardContent>
+              </Card>
+            }>
+              <LibraryTab
+                exercises={exercises}
+                workouts={workoutLibrary}
+                plans={plans}
+                onUpdateExercises={(ex) => {
+                  try {
+                    setExercises(ex);
+                    saveExercises(ex);
+                    console.log(`[App] Updated exercises library: ${ex.length} exercises`);
+                  } catch (error) {
+                    console.error("[App] Failed to update exercises library:", error);
+                    alert("Failed to save exercises. Please check console for details.");
+                  }
+                }}
+                onUpdateWorkouts={(w) => {
+                  setWorkoutLibrary(w);
+                  saveWorkouts(w);
+                }}
+                onUpdatePlans={(p) => {
+                  setPlans(p);
+                  savePlans(p);
+                }}
+                onSelectPlan={(plan) => {
+                  setActivePlan(plan);
+                }}
+              />
+            </Suspense>
           </TabsContent>
         </Tabs>
 
