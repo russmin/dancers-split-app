@@ -15,20 +15,25 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          // Don't split React - keep it in main bundle for reliability
-          // Only split other large dependencies
+          // Keep React and React-dependent libraries in main bundle
           if (id.includes('node_modules')) {
-            // Keep React in main bundle - don't split it
+            // Don't split React - keep it in main bundle
             if (id.includes('/react/') || id.includes('/react-dom/') || 
-                id.includes('\\react\\') || id.includes('\\react-dom\\')) {
+                id.includes('\\react\\') || id.includes('\\react-dom\\') ||
+                id.includes('react/index') || id.includes('react-dom/index')) {
               // Return undefined to keep in main bundle
               return;
             }
-            if (id.includes('framer-motion') || id.includes('recharts')) {
-              return 'ui-vendor';
+            // framer-motion requires React, so keep it with React in main bundle
+            if (id.includes('framer-motion')) {
+              return; // Keep in main bundle with React
             }
+            // Radix UI components also need React - keep in main bundle
             if (id.includes('@radix-ui')) {
-              return 'radix-vendor';
+              return; // Keep in main bundle to ensure React is available
+            }
+            if (id.includes('recharts')) {
+              return 'ui-vendor';
             }
             // Other node_modules go into a vendor chunk
             return 'vendor';
