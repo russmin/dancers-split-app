@@ -12,20 +12,17 @@ export default defineConfig({
   },
   build: {
     chunkSizeWarningLimit: 1000, // Adjust warning limit (in KB)
-    commonjsOptions: {
-      include: [/node_modules/],
-      transformMixedEsModules: true,
-    },
     rollupOptions: {
       output: {
         manualChunks(id) {
-          // Ensure React and React-DOM are always together and loaded first
+          // Don't split React - keep it in main bundle for reliability
+          // Only split other large dependencies
           if (id.includes('node_modules')) {
-            // Match React more precisely
+            // Keep React in main bundle - don't split it
             if (id.includes('/react/') || id.includes('/react-dom/') || 
-                id.includes('\\react\\') || id.includes('\\react-dom\\') ||
-                id.includes('/react/index.js') || id.includes('/react-dom/index.js')) {
-              return 'react-vendor';
+                id.includes('\\react\\') || id.includes('\\react-dom\\')) {
+              // Return undefined to keep in main bundle
+              return;
             }
             if (id.includes('framer-motion') || id.includes('recharts')) {
               return 'ui-vendor';
