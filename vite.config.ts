@@ -8,15 +8,23 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+    dedupe: ['react', 'react-dom'], // Ensure React is not duplicated
   },
   build: {
     chunkSizeWarningLimit: 1000, // Adjust warning limit (in KB)
+    commonjsOptions: {
+      include: [/node_modules/],
+      transformMixedEsModules: true,
+    },
     rollupOptions: {
       output: {
         manualChunks(id) {
-          // Separate vendor chunks for better caching
+          // Ensure React and React-DOM are always together and loaded first
           if (id.includes('node_modules')) {
-            if (id.includes('react') || id.includes('react-dom')) {
+            // Match React more precisely
+            if (id.includes('/react/') || id.includes('/react-dom/') || 
+                id.includes('\\react\\') || id.includes('\\react-dom\\') ||
+                id.includes('/react/index.js') || id.includes('/react-dom/index.js')) {
               return 'react-vendor';
             }
             if (id.includes('framer-motion') || id.includes('recharts')) {
