@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Edit3, Save, X, Trash2 } from "lucide-react";
+import { markPRsBeforeInsert } from "@/lib/pr";
 
 const Badge = ({ children }: { children: React.ReactNode }) => (
   <span className="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-medium text-emerald-700 border-emerald-200 bg-emerald-50">
@@ -79,7 +80,17 @@ export default function WorkoutLogTable({ workouts, unit, onChange }: Props) {
   function saveEdit(id: string) {
     const patch = editDrafts[id];
     if (!patch) return setEditingId(null);
-    onChange(workouts.map(w => (w.id === id ? patch : w)));
+    
+    // Remove the entry being edited from workouts to recalculate PRs correctly
+    const workoutsWithoutEdited = workouts.filter(w => w.id !== id);
+    
+    // Recalculate PRs for the edited entry based on all other workouts
+    const withPR = markPRsBeforeInsert(workoutsWithoutEdited, [patch]);
+    
+    // Replace the old entry with the new one (with updated PR flags)
+    const updated = workouts.map(w => w.id === id ? withPR[0] : w);
+    
+    onChange(updated);
     setEditDrafts(d => {
       const copy = { ...d };
       delete copy[id];
@@ -135,8 +146,24 @@ export default function WorkoutLogTable({ workouts, unit, onChange }: Props) {
                     ? "—"
                     : (Math.round(fromKg(draft.weightKg, unit) * 10) / 10).toString();
 
+                  // Check if this is a PR from this week
+                  const isPRThisWeek = (() => {
+                    const date = new Date(w.date + "T00:00:00");
+                    const today = new Date();
+                    const weekStart = new Date(today);
+                    weekStart.setDate(today.getDate() - today.getDay()); // Sunday
+                    weekStart.setHours(0, 0, 0, 0);
+                    const weekEnd = new Date(weekStart);
+                    weekEnd.setDate(weekStart.getDate() + 6);
+                    weekEnd.setHours(23, 59, 59, 999);
+                    const isThisWeek = date >= weekStart && date <= weekEnd;
+                    return isThisWeek && (w.isPRMaxWeight || w.isPRVolume);
+                  })();
+
+                  const rowClass = isPRThisWeek ? "bg-emerald-50 border-l-4 border-l-emerald-500" : "";
+
                   return (
-                    <tr key={w.id} className="border-b last:border-0">
+                    <tr key={w.id} className={`border-b last:border-0 ${rowClass}`}>
                       <td className="py-2 pr-4 whitespace-nowrap">
                         {isEditing ? (
                           <Input

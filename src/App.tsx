@@ -7,10 +7,27 @@ import PlanTab from "@/components/PlanTab";
 import ProgressTab from "./Progress/ProgressTab";
 import CircuitRunner, { type CircuitSpec } from "@/components/CircuitRunner";
 import WeeklyWorkoutLog from "@/Progress/WeeklyWorkoutLog";
+import LibraryTab from "@/components/LibraryTab";
+import WorkoutPreview from "@/components/WorkoutPreview";
 
 import { markPRsBeforeInsert } from "@/lib/pr";
 // If you keep a manual-log picker you can re-enable this import.
 import { EXERCISES } from "@/lib/exercises";
+import {
+  Exercise,
+  Workout,
+  WorkoutPlan,
+  loadExercises,
+  loadWorkouts,
+  loadPlans,
+  saveExercises,
+  saveWorkouts,
+  savePlans,
+  populatePlanDays,
+  populateWorkoutExercises,
+} from "@/lib/workoutLibrary";
+import { initializeLibrary } from "@/lib/defaultWorkouts";
+import { planToLegacyFormat, workoutToCircuitSpec } from "@/lib/workoutConverters";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -163,61 +180,8 @@ function roundDisplayUnit(n: number, unit: "kg" | "lb") {
 }
 
 /* --------------------------------------------
-   Plan Data (Final 4-Day Dancer's Split)
+   Workout Library Integration
 ---------------------------------------------*/
-const dancerSplit = [
-  {
-    day: 1,
-    title: "Lower Body Strength & Stability",
-    exercises: [
-      "Leg Press (Bilateral): 4x6-8 (2-3 min rest)",
-      "Bulgarian Split Squats: 3x8-10/leg (90s rest)",
-      "Romanian Deadlifts: 3x8-10 (90s rest)",
-      "Single-Leg Leg Curl: 3x8-10/leg (60s rest)",
-      "Pallof Press: 3x10-12/side (60s rest)",
-      "Deep Goblet Squat Hold (Kettlebell): 3x30s (60s rest)",
-      "Standing Calf Raises: 4x12-15 (45s rest)",
-    ],
-  },
-  {
-    day: 2,
-    title: "Upper Body Strength & Posture",
-    exercises: [
-      "Lat Pulldown (Wide Grip): 4x10-12 (2-3 min rest)",
-      "Seated Row (Neutral Grip): 3x12-15 (90s rest)",
-      "Smith Machine Overhead Press: 3x6-8 (90s rest)",
-      "Incline Dumbbell Press: 3x8-10 (90s rest)",
-      "Cable Face Pulls: 3x12-15 (60s rest)",
-      "Assisted Dips: 3 sets to failure (60s rest)",
-      "Suitcase Carry (Finisher): 2x30s/side (No rest between sides)",
-    ],
-  },
-  {
-    day: 3,
-    title: "Full-Body Power & Endurance (Circuit)",
-    exercises: [
-      "Format: 3 rounds. Rest 60-90 sec after completing the entire circuit.",
-      "Kettlebell Swings: 45s",
-      "Box Jumps / Broad Jumps: 45s",
-      "Push-Ups: 45s",
-      "Single-Leg RDL (Bodyweight): 45s/leg",
-      "Bird Dog Crunch 10-12 reps/side",
-      "Plank: 60s hold",
-    ],
-  },
-  {
-    day: 4,
-    title: "Dance-Specific Power & Plyometrics",
-    exercises: [
-      "Depth Drops to Stick Landing: 3x5 (2-3 min rest)",
-      "Lateral Skater Jumps: 3x8/side (90s rest)",
-      "Single-Leg Box Jumps: 3x5/leg (90s rest)",
-      "Copenhagen Planks: 3x8-10/side (60s rest)",
-      "Band-Resisted Ankle Jumps: 3x15 (60s rest)",
-      "Deep Goblet Squat Hold (Kettlebell): 2x30s (60s rest)",
-    ],
-  },
-] as const;
 
 /* --------------------------------------------
    Plan parsing helpers
@@ -399,6 +363,19 @@ function RestTimer({
    Main Component
 ---------------------------------------------*/
 export default function DancerSplitTracker() {
+  // Workout Library State
+  const [exercises, setExercises] = useState<Exercise[]>([]);
+  const [workoutLibrary, setWorkoutLibrary] = useState<Workout[]>([]);
+  const [plans, setPlans] = useState<WorkoutPlan[]>([]);
+  const [activePlan, setActivePlan] = useState<WorkoutPlan | null>(null);
+  
+  // Legacy format for backwards compatibility
+  const [dancerSplit, setDancerSplit] = useState<Array<{
+    day: number;
+    title: string;
+    exercises: string[];
+  }>>([]);
+
   // Profile & Units
   const [autoRest, setAutoRest] = useState(true);
   const [profile, setProfile] = useState<UserProfile>({
@@ -423,6 +400,8 @@ export default function DancerSplitTracker() {
   // Manual log form
   const [wDate, setWDate] = useState<string>(todayISO());
   const [wName, setWName] = useState<string>("");
+  const [wExerciseId, setWExerciseId] = useState<string>(""); // Selected exercise ID from library
+  const [wOpenEntry, setWOpenEntry] = useState<boolean>(false); // Use open entry (not from library)
   const [wSets, setWSets] = useState<string>("3");
   const [wReps, setWReps] = useState<string>("10");
   const [wWeight, setWWeight] = useState<string>("");
@@ -461,7 +440,7 @@ export default function DancerSplitTracker() {
   const [timerRemaining, setTimerRemaining] = useState<number | null>(null);
 
   const [roundInput, setRoundInput] = useState<string>(
-    String(sessionPlan[sessionIdx].rounds ?? 1)
+    String(sessionPlan[sessionIdx]?.rounds ?? 1)
     );
   const [repInput, setRepInput] = useState<string>(
     String(sessionPlan[sessionIdx]?.reps ?? "")
@@ -474,10 +453,99 @@ export default function DancerSplitTracker() {
   const [exerciseFilter, setExerciseFilter] = useState<string>("__all");
   const [activeTopTab, setActiveTopTab] = useState<string>(() => localStorage.getItem("activeTab") || "plan");
   const [activePlanDay, setActivePlanDay] = useState<string>("1");
+  const [showWorkoutPreview, setShowWorkoutPreview] = useState(false);
+  const [previewDay, setPreviewDay] = useState<number>(1);
+  const [editingExerciseIndex, setEditingExerciseIndex] = useState<number | null>(null);
  // effect
   useEffect(() => { localStorage.setItem("activeTab", activeTopTab); }, [activeTopTab]);
   // Import/Export
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Initialize Workout Library
+  useEffect(() => {
+    try {
+      console.log("Initializing workout library...");
+      // Load profile first to get programName
+      let loadedProfile: UserProfile | null = null;
+      try {
+        const p = localStorage.getItem(STORAGE_KEYS.profile);
+        if (p) loadedProfile = JSON.parse(p);
+        console.log("Loaded profile:", loadedProfile?.programName);
+      } catch (err) {
+        console.error("Error loading profile:", err);
+      }
+
+      let loadedExercises = loadExercises();
+      let loadedWorkouts = loadWorkouts();
+      let loadedPlans = loadPlans();
+      console.log("Loaded:", { exercises: loadedExercises.length, workouts: loadedWorkouts.length, plans: loadedPlans.length });
+
+      // Initialize with defaults if empty
+      if (loadedExercises.length === 0) {
+        console.log("Initializing default library...");
+        try {
+          const { exercises: defaultExercises, workouts: defaultWorkouts, plan } = initializeLibrary();
+          loadedExercises = defaultExercises;
+          loadedWorkouts = defaultWorkouts;
+          loadedPlans = [plan];
+          saveExercises(loadedExercises);
+          saveWorkouts(loadedWorkouts);
+          savePlans(loadedPlans);
+          console.log("Default library initialized:", { exercises: loadedExercises.length, workouts: loadedWorkouts.length });
+        } catch (err) {
+          console.error("Error initializing library:", err);
+          throw err; // Re-throw to be caught by outer catch
+        }
+      }
+
+      setExercises(loadedExercises);
+      setWorkoutLibrary(loadedWorkouts);
+      setPlans(loadedPlans);
+
+      // Load or set active plan - use loaded profile's programName or default
+      const programName = loadedProfile?.programName || profile.programName || "Final 4-Day Dancer's Split";
+      const plan = loadedPlans.find(p => p.name === programName) || loadedPlans[0] || null;
+      console.log("Selected plan:", plan?.name);
+      setActivePlan(plan);
+
+      // Convert to legacy format for backwards compatibility
+      if (plan && loadedExercises.length > 0 && loadedWorkouts.length > 0) {
+        try {
+          const populatedPlan = populatePlanDays(plan, loadedWorkouts, loadedExercises);
+          const legacyPlan = planToLegacyFormat(populatedPlan, loadedWorkouts, loadedExercises);
+          setDancerSplit(legacyPlan);
+          console.log("Converted plan to legacy format:", legacyPlan.length, "days");
+        } catch (err) {
+          console.error("Error converting plan to legacy format:", err);
+        }
+      } else {
+        console.warn("Cannot convert plan - missing data:", { plan: !!plan, exercises: loadedExercises.length, workouts: loadedWorkouts.length });
+      }
+    } catch (err) {
+      console.error("Error initializing workout library:", err);
+      // Still try to render something
+      setDancerSplit([]);
+    }
+  }, []); // Only run once on mount
+
+  // Update legacy format when plan changes
+  useEffect(() => {
+    if (activePlan && exercises.length > 0 && workoutLibrary.length > 0) {
+      const populatedPlan = populatePlanDays(activePlan, workoutLibrary, exercises);
+      const legacyPlan = planToLegacyFormat(populatedPlan, workoutLibrary, exercises);
+      setDancerSplit(legacyPlan);
+      
+      // Update profile program name
+      if (activePlan.name) {
+        setProfile((p) => ({
+          ...p,
+          programName: activePlan.name,
+          programDurationWeeks: activePlan.durationWeeks ?? p.programDurationWeeks,
+          daysPerWeek: activePlan.daysPerWeek ?? p.daysPerWeek,
+        }));
+      }
+    }
+  }, [activePlan, exercises, workoutLibrary]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Persistence
   useEffect(() => {
@@ -591,92 +659,147 @@ export default function DancerSplitTracker() {
 }
 
   // Session helpers
-  function startSession(day: number | string | undefined | null) {
-    const dnum = Number(day);
-    if (![1, 2, 3, 4].includes(dnum)) {
-      // fallback to day 1 if an invalid value slips in
-      return startSession(1);
+  function buildSessionPlan(day: number) {
+    if (!activePlan || !dancerSplit.length) return null;
+
+    const planDay = activePlan.days.find((d) => d.day === day);
+    if (!planDay) return null;
+
+    const workout = workoutLibrary.find((w) => w.id === planDay.workoutId);
+    if (!workout) return null;
+
+    const populatedWorkout = populateWorkoutExercises(workout, exercises);
+
+    // Circuit mode - return circuit spec
+    if (workout.mode === "circuit") {
+      return { workout, planDay, mode: "circuit" as const, circuitSpec: workoutToCircuitSpec(populatedWorkout, exercises) };
     }
 
-    // Day 3 → circuit
-    if (dnum === 3) {
-      const spec = day3ToCircuit();
-      setCircuitSpec(spec);
-      setSessionMode("circuit");
+    // Sets/reps or timed mode
+    const plan = populatedWorkout.exercises.map((we) => {
+      const ex = we.exercise;
+      if (!ex) {
+        return {
+          name: we.exerciseId,
+          sets: [{ reps: "", weight: "" }],
+          restSec: we.restSec,
+        };
+      }
+
+      const name = ex.name;
+      const restSec = we.restSec ?? ex.defaultRestSec;
+
+      // Timed exercise
+      if (we.seconds || ex.isTimed) {
+        const seconds = we.seconds ?? ex.defaultSeconds ?? 30;
+        return {
+          name,
+          timed: true as const,
+          seconds,
+          restSec,
+          sets: [{ reps: "", weight: "" }],
+        };
+      }
+
+      // Sets/reps exercise
+      const sets = we.sets ?? ex.defaultSets ?? 3;
+      const repRange = we.repRange ?? ex.defaultRepRange;
+      const repLow = repRange ? repRange[0] : we.reps ?? 10;
+      const repHigh = repRange ? repRange[1] : we.reps ?? 12;
+
+      let nextReps = repLow;
+      let nextWeightUnit: number | "" = "";
+
+      const prev = lastEntryFor(workouts, name);
+
+      if (prev) {
+        const prevReps = prev.reps ?? repLow;
+        const prevWeightKg = prev.weightKg;
+
+        if (repHigh && prevReps >= repHigh) {
+          // REACHED MAX REPS → add weight
+          if (typeof prevWeightKg === "number") {
+            const incKg = PO_INCR[unit] === 5 ? 5 * KG_PER_LB : 2.5;
+            const suggestedKg = prevWeightKg + incKg;
+            const asUnit = fromKg(suggestedKg, unit);
+            nextWeightUnit = roundDisplayUnit(asUnit, unit);
+          }
+          nextReps = repLow; // reset reps to bottom
+        } else {
+          // NOT YET AT MAX REPS → +1 rep, same weight
+          nextReps = prevReps + 1;
+          if (typeof prevWeightKg === "number") {
+            const asUnit = fromKg(prevWeightKg, unit);
+            nextWeightUnit = roundDisplayUnit(asUnit, unit);
+          }
+        }
+      }
+
+      // Build sets with suggested reps/weight prefilled
+      const setsArr = Array.from({ length: sets }, () => ({
+        reps: nextReps,
+        weight: nextWeightUnit,
+      }));
+
+      return { name, sets: setsArr, restSec };
+    });
+
+    if (plan.length === 0) return null;
+
+    return { workout, planDay, mode: "sets" as const, plan };
+  }
+
+  function startSession(day: number | string | undefined | null, customPlan?: typeof sessionPlan) {
+    const dnum = Number(day);
+    
+    // If we have a custom plan (edited plan from preview), use it directly
+    if (customPlan && customPlan.length > 0) {
+      setSessionPlan(customPlan as any);
+      setSessionIdx(0);
+      setCurrentSetIdx(0);
       setSessionDay(dnum);
+      setSessionMode("sets");
       setSessionActive(true);
+      setShowWorkoutPreview(false);
       setActiveTopTab("track");
       return;
     }
 
-    // Other days → sets/reps
-    const d = dancerSplit.find((x) => x.day === dnum);
-    if (!d) return;
+    // Otherwise, build the session plan
+    const built = buildSessionPlan(dnum);
+    if (!built) {
+      console.error("Cannot start session: buildSessionPlan returned null", { day: dnum, activePlan, dancerSplitLength: dancerSplit.length });
+      alert("Cannot start session. Please ensure you have an active plan and the workout exists.");
+      return;
+    }
 
-    const plan = d.exercises
-      .filter((s) => !/^Format:/i.test(s))
-      .map((s) => {
-        const name = s.split(":")[0];
-        const parsed = parseSetsAndReps(s);
-        const restSec = extractRestSeconds(s);
+    // Circuit mode
+    if (built.mode === "circuit" && built.circuitSpec) {
+      setCircuitSpec(built.circuitSpec);
+      setCircuitManual(Array.from({ length: built.circuitSpec.stations.length }, () => ({})));
+      setSessionMode("circuit");
+      setSessionDay(dnum);
+      setSessionActive(true);
+      setShowWorkoutPreview(false);
+      setActiveTopTab("track");
+      return;
+    }
 
-        if (parsed.timed) {
-          return {
-            name,
-            timed: true as const,
-            seconds: parsed.seconds,
-            restSec,
-            sets: [{ reps: "", weight: "" }],
-          };
-        }
+    // Sets/reps or timed mode
+    const planToUse = built.plan;
+    if (!planToUse || planToUse.length === 0) {
+      console.error("Cannot start session: plan is empty", { built });
+      alert("Cannot start session. No exercises in workout.");
+      return;
+    }
 
-        const [repLow, repHigh] = extractRepRangeFromName(s); // e.g., 8–12
-        let nextReps = repLow;
-        let nextWeightUnit: number | "" = "";
-
-        const prev = lastEntryFor(workouts, name); // ✅ This was missing
-
-        if (prev) {
-          const prevReps = prev.reps ?? repLow;
-          const prevWeightKg = prev.weightKg;
-
-          if (repHigh && prevReps >= repHigh) {
-            // REACHED MAX REPS → add weight
-            if (typeof prevWeightKg === "number") {
-              const incKg = PO_INCR[unit] === 5 ? 5 * KG_PER_LB : 2.5;
-              const suggestedKg = prevWeightKg + incKg;
-              const asUnit = fromKg(suggestedKg, unit);
-              nextWeightUnit = roundDisplayUnit(asUnit, unit);
-            }
-            nextReps = repLow; // reset reps to bottom
-          } else {
-            // NOT YET AT MAX REPS → +1 rep, same weight
-            nextReps = prevReps + 1;
-            if (typeof prevWeightKg === "number") {
-              const asUnit = fromKg(prevWeightKg, unit);
-              nextWeightUnit = roundDisplayUnit(asUnit, unit);
-            }
-          }
-        }
-
-        // Build sets with suggested reps/weight prefilled
-        const setsArr = Array.from({ length: parsed.sets }, () => ({
-          reps: nextReps,
-          weight: nextWeightUnit,
-        }));
-
-        return { name, sets: setsArr, restSec };
-      });
-
-
-    if (plan.length === 0) return;
-  
-    setSessionPlan(plan as any);
+    setSessionPlan(planToUse as any);
     setSessionIdx(0);
     setCurrentSetIdx(0);
     setSessionDay(dnum);
     setSessionMode("sets");
     setSessionActive(true);
+    setShowWorkoutPreview(false);
     setActiveTopTab("track");
   }
   
@@ -788,34 +911,63 @@ export default function DancerSplitTracker() {
   const profileComplete = profile.name.trim().length > 0;
 
 
-    // Prefill manual log with PO when an exercise is chosen
+    // Prefill manual log with PO when an exercise is chosen from library
   useEffect(() => {
-    const name = wName.trim();
-    if (!name) return;
+    if (wOpenEntry) return; // Don't prefill for open entries
+    
+    const exerciseId = wExerciseId;
+    if (!exerciseId) return;
 
-    const prev = lastEntryFor(workouts, name);
-    if (!prev) return;
+    const exercise = exercises.find((e) => e.id === exerciseId);
+    if (!exercise) return;
 
-    // Only prefill if the user hasn't typed their own values yet
-    const repsEmpty = wReps === "" || wReps === "10";    // your default is "10"
-    const weightEmpty = wWeight === "";                   // empty means not set
-
-
-    if (repsEmpty) {
-      const nextReps = Math.max(Number(wReps || 0), (prev.reps ?? 0) + 1);
-      if (nextReps > 0) setWReps(String(nextReps));
+    // Prefill with exercise defaults
+    if (exercise.defaultSets && (wSets === "" || wSets === "3")) {
+      setWSets(String(exercise.defaultSets));
     }
 
-    if (weightEmpty && typeof prev.weightKg === "number") {
-      const incKg = PO_INCR[unit] === 5 ? 5 * KG_PER_LB : 2.5;
-      const suggestedKg = prev.weightKg + incKg;
-      const asUnit = fromKg(suggestedKg, unit);
-      setWWeight(String(roundDisplayUnit(asUnit, unit)));
+    if (exercise.defaultRepRange) {
+      const [min, max] = exercise.defaultRepRange;
+      if (wReps === "" || wReps === "10") {
+        // Try progressive overload first
+        const prev = lastEntryFor(workouts, exercise.name);
+        if (prev) {
+          const prevReps = prev.reps ?? min;
+          if (prevReps >= max) {
+            // At max, suggest min again (weight will be increased)
+            setWReps(String(min));
+          } else {
+            // Not at max, +1 rep
+            setWReps(String(prevReps + 1));
+          }
+        } else {
+          setWReps(String(min));
+        }
+      }
     }
 
-    // You can also set default sets to 1 if you prefer
-    if (wSets === "" || wSets === "3") setWSets("1");
-  }, [wName, unit, workouts]); // deps
+    // Progressive overload for weight
+    const prev = lastEntryFor(workouts, exercise.name);
+    if (prev && wWeight === "") {
+      const prevReps = prev.reps ?? 0;
+      const prevWeightKg = prev.weightKg;
+      const repRange = exercise.defaultRepRange;
+      
+      if (repRange && prevReps >= repRange[1]) {
+        // Reached max reps, suggest weight increase
+        if (typeof prevWeightKg === "number") {
+          const incKg = PO_INCR[unit] === 5 ? 5 * KG_PER_LB : 2.5;
+          const suggestedKg = prevWeightKg + incKg;
+          const asUnit = fromKg(suggestedKg, unit);
+          setWWeight(String(roundDisplayUnit(asUnit, unit)));
+        }
+      } else if (typeof prevWeightKg === "number") {
+        // Not at max, keep same weight
+        const asUnit = fromKg(prevWeightKg, unit);
+        setWWeight(String(roundDisplayUnit(asUnit, unit)));
+      }
+    }
+  }, [wExerciseId, exercises, unit, workouts, wOpenEntry, wSets, wReps, wWeight]); // deps
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-slate-50 to-white text-slate-900 p-4 md:p-8">
       <div className="mx-auto max-w-6xl space-y-6">
@@ -831,11 +983,12 @@ export default function DancerSplitTracker() {
         </div>
 
         <Tabs value={activeTopTab} onValueChange={setActiveTopTab} className="w-full">
-          <TabsList className="grid grid-cols-4 w-full">
+          <TabsList className="grid grid-cols-5 w-full">
             <TabsTrigger value="profile">Profile</TabsTrigger>
             <TabsTrigger value="plan">Plan</TabsTrigger>
             <TabsTrigger value="track">Track</TabsTrigger>
             <TabsTrigger value="progress">Progress</TabsTrigger>
+            <TabsTrigger value="library">Library</TabsTrigger>
           </TabsList>
 
           {/* PROFILE TAB */}
@@ -852,43 +1005,175 @@ export default function DancerSplitTracker() {
               onImportFile={handleImportFile}
               fromKg={fromKg}
               toKg={toKg}
+              activePlan={activePlan}
+              availablePlans={plans}
+              onSelectPlan={(planId) => {
+                const plan = plans.find((p) => p.id === planId);
+                if (!plan) return;
+                const updatedPlan = { ...plan, startDate: todayISO() };
+                setActivePlan(updatedPlan);
+                // Clear start dates from all other plans
+                const updatedPlans = plans.map((p) => 
+                  p.id === planId ? updatedPlan : { ...p, startDate: undefined }
+                );
+                setPlans(updatedPlans);
+                savePlans(updatedPlans);
+                // Update profile
+                setProfile((p) => ({
+                  ...p,
+                  programName: plan.name,
+                  programDurationWeeks: plan.durationWeeks ?? p.programDurationWeeks,
+                  daysPerWeek: plan.daysPerWeek ?? p.daysPerWeek,
+                  programStartDate: updatedPlan.startDate,
+                }));
+                // Update legacy format will happen in useEffect
+              }}
             />
           </TabsContent>
 
           {/* PLAN TAB */}
           <TabsContent value="plan">
-            <PlanTab
-              plan={dancerSplit}
-              activePlanDay={activePlanDay}
-              onChangeActivePlanDay={setActivePlanDay}
-              onStartSession={(day) => {
-                startSession(Number(day));
-                setActiveTopTab("track");
-              }}
-              /* Calendar props */
-              preferredDays={(profile.preferredDays as any) || []}
-              programStartDate={profile.programStartDate}
-              daysPerWeek={profile.daysPerWeek as any}
-              completedDates={completedDates}
-              onPickDate={(isoDate, suggestedPlanDay) => {
-                setSessionDate(isoDate);
-                startSession(suggestedPlanDay ?? 1);
-                setActiveTopTab("track");
-              }}
-            />
+            {dancerSplit.length === 0 ? (
+              <Card className="rounded-2xl shadow-sm">
+                <CardContent className="p-6 text-center text-slate-600">
+                  <p>Loading workout plan...</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <PlanTab
+                plan={dancerSplit}
+                activePlanDay={activePlanDay}
+                onChangeActivePlanDay={setActivePlanDay}
+                onStartSession={(day) => {
+                  setPreviewDay(day);
+                  setShowWorkoutPreview(true);
+                  setActiveTopTab("track");
+                }}
+                /* Calendar props */
+                preferredDays={(profile.preferredDays as any) || []}
+                programStartDate={profile.programStartDate}
+                daysPerWeek={profile.daysPerWeek as any}
+                completedDates={completedDates}
+                onPickDate={(isoDate, suggestedPlanDay) => {
+                  setSessionDate(isoDate);
+                  setPreviewDay(suggestedPlanDay ?? 1);
+                  setShowWorkoutPreview(true);
+                }}
+                activePlan={activePlan}
+                availablePlans={plans}
+                onCancelPlan={() => {
+                  if (activePlan) {
+                    // Clear start date from the plan
+                    const updatedPlans = plans.map((p) => 
+                      p.id === activePlan.id ? { ...p, startDate: undefined } : p
+                    );
+                    setPlans(updatedPlans);
+                    savePlans(updatedPlans);
+                  }
+                  setActivePlan(null);
+                  setDancerSplit([]);
+                  setProfile((p) => ({ ...p, programName: "", programStartDate: undefined }));
+                }}
+                onStartNewPlan={(planId) => {
+                  const plan = plans.find((p) => p.id === planId);
+                  if (!plan) return;
+                  const updatedPlan = { ...plan, startDate: todayISO() };
+                  setActivePlan(updatedPlan);
+                  // Clear start dates from all other plans
+                  const updatedPlans = plans.map((p) => 
+                    p.id === planId ? updatedPlan : { ...p, startDate: undefined }
+                  );
+                  setPlans(updatedPlans);
+                  savePlans(updatedPlans);
+                  // Update profile
+                  setProfile((p) => ({
+                    ...p,
+                    programName: plan.name,
+                    programDurationWeeks: plan.durationWeeks ?? p.programDurationWeeks,
+                    daysPerWeek: plan.daysPerWeek ?? p.daysPerWeek,
+                    programStartDate: updatedPlan.startDate,
+                  }));
+                  // Update legacy format will happen in useEffect
+                }}
+              />
+            )}
           </TabsContent>
 
           {/* TRACK TAB (circuit OR sets runner, else start) */}
           <TabsContent value="track">
             <div className="space-y-6">
+              {/* WORKOUT PREVIEW */}
+              {showWorkoutPreview && (
+                <WorkoutPreview
+                  day={sessionActive ? sessionDay : previewDay}
+                  date={sessionDate}
+                  onDateChange={setSessionDate}
+                  builtSession={sessionActive ? (sessionMode === "circuit" && circuitSpec ? {
+                    workout: workoutLibrary.find((w) => w.id === activePlan?.days.find((d) => d.day === sessionDay)?.workoutId)!,
+                    planDay: activePlan?.days.find((d) => d.day === sessionDay)!,
+                    mode: "circuit",
+                    circuitSpec: circuitSpec,
+                  } : {
+                    workout: workoutLibrary.find((w) => w.id === activePlan?.days.find((d) => d.day === sessionDay)?.workoutId)!,
+                    planDay: activePlan?.days.find((d) => d.day === sessionDay)!,
+                    mode: "sets",
+                    plan: sessionPlan as any,
+                  }) : buildSessionPlan(previewDay)}
+                  exercises={exercises}
+                  workoutLibrary={workoutLibrary}
+                  onStart={(editedPlan) => {
+                    if (sessionActive && editedPlan) {
+                      // Update current session with edited plan
+                      setSessionPlan(editedPlan as any);
+                      // If current exercise index is out of bounds, adjust it
+                      if (sessionIdx >= editedPlan.length) {
+                        setSessionIdx(Math.max(0, editedPlan.length - 1));
+                      }
+                      setShowWorkoutPreview(false);
+                      setEditingExerciseIndex(null);
+                    } else {
+                      // Starting new session
+                      startSession(previewDay, editedPlan);
+                      setShowWorkoutPreview(false);
+                      setEditingExerciseIndex(null);
+                    }
+                  }}
+                  onCancel={() => {
+                    setShowWorkoutPreview(false);
+                    setEditingExerciseIndex(null);
+                  }}
+                  onEditExercise={(index) => setEditingExerciseIndex(index)}
+                  editingIndex={editingExerciseIndex}
+                  unit={unit}
+                  workouts={workouts}
+                  lastEntryFor={lastEntryFor}
+                  fromKg={fromKg}
+                  roundDisplayUnit={roundDisplayUnit}
+                />
+              )}
+
               {/* 1) CIRCUIT MODE */}
               {sessionActive && sessionMode === "circuit" && circuitSpec ? (
                 <Card className="rounded-2xl shadow-sm">
                   <CardHeader>
-                    <CardTitle className="text-lg">
-                      Session — Day {sessionDay}
-                      <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
-                    </CardTitle>
+                    <div className="flex justify-between items-start">
+                      <CardTitle className="text-lg">
+                        Session — Day {sessionDay}
+                        <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
+                      </CardTitle>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setShowWorkoutPreview(true);
+                          setEditingExerciseIndex(null);
+                          setPreviewDay(sessionDay);
+                        }}
+                        className="rounded-lg"
+                      >
+                        Edit Workout
+                      </Button>
+                    </div>
                   </CardHeader>
                   <CardContent className="space-y-4 text-sm">
                     <div>
@@ -921,12 +1206,12 @@ export default function DancerSplitTracker() {
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                             {/* Reps Input */}
                             <div>
-                              <Label>Reps</Label>
+                              <Label>Reps (total)</Label>
                               <Input
                                 type="text"
                                 inputMode="numeric"
                                 value={
-                                  circuitManual[i]?.reps !== undefined && circuitManual[i]?.reps !== null
+                                  circuitManual[i]?.reps !== undefined && circuitManual[i]?.reps !== null && circuitManual[i].reps !== ""
                                     ? String(circuitManual[i].reps)
                                     : ""
                                 }
@@ -934,13 +1219,28 @@ export default function DancerSplitTracker() {
                                   const val = e.target.value;
                                   setCircuitManual((prev) => {
                                     const copy = [...prev];
-                                    const parsed =  Number(val);
-                                    copy[i] = {
-                                      ...copy[i],
-                                      reps: val === "" || isNaN(parsed) ? "" : parsed,
-                                    };
+                                    // Allow empty string, 0, or positive numbers
+                                    if (val === "") {
+                                      copy[i] = { ...copy[i], reps: "" };
+                                    } else {
+                                      const parsed = Number(val);
+                                      if (!isNaN(parsed) && parsed >= 0) {
+                                        copy[i] = { ...copy[i], reps: parsed };
+                                      }
+                                    }
                                     return copy;
                                   });
+                                }}
+                                onBlur={(e) => {
+                                  // On blur, if empty, set to empty string (allows clearing)
+                                  const val = e.target.value;
+                                  if (val === "") {
+                                    setCircuitManual((prev) => {
+                                      const copy = [...prev];
+                                      copy[i] = { ...copy[i], reps: "" };
+                                      return copy;
+                                    });
+                                  }
                                 }}
                               />
                             </div>
@@ -994,44 +1294,47 @@ export default function DancerSplitTracker() {
                         onClick={() => {
                           const auto: WorkoutEntry[] = [];
 
-                          for (let r = 1; r <= circuitSpec.rounds; r++) {
-                            for (let i = 0; i < circuitSpec.stations.length; i++) {
-                              const st = circuitSpec.stations[i];
-                              const manual = circuitManual[i] || {};
+                          // Log each station once (not per round)
+                          for (let i = 0; i < circuitSpec.stations.length; i++) {
+                            const st = circuitSpec.stations[i];
+                            const manual = circuitManual[i] || {};
 
-                              // Always log the timed portion
+                            // Always log the timed portion (total seconds across all rounds)
+                            const totalSeconds = st.seconds * circuitSpec.rounds;
+                            auto.push({
+                              id: uid(),
+                              date: sessionDate,
+                              name: `${st.label} (sec)`,
+                              sets: 1,
+                              reps: totalSeconds,
+                            });
+
+                            // Sanitize reps and weight input
+                            const repsValue =
+                              typeof manual.reps === "number" ? manual.reps : Number(manual.reps);
+                            const weightValue =
+                              typeof manual.weight === "number"
+                                ? manual.weight
+                                : Number(manual.weight);
+
+                            // Only push manual log if user entered something
+                            // Reps should be entered once per station, representing total reps or reps per round
+                            if (!isNaN(repsValue) || !isNaN(weightValue)) {
+                              // If reps entered, assume it's total reps (or user can multiply per round)
+                              // For now, log as-is - user enters total reps for all rounds
                               auto.push({
                                 id: uid(),
                                 date: sessionDate,
-                                name: `${st.label} (sec)`,
-                                sets: 1,
-                                reps: st.seconds, // already a number
+                                name: st.label,
+                                sets: circuitSpec.rounds, // Use rounds as sets to indicate it's across multiple rounds
+                                reps: isNaN(repsValue) ? 0 : repsValue,
+                                weightKg:
+                                  isNaN(weightValue)
+                                    ? undefined
+                                    : unit === "lb"
+                                    ? Math.round(weightValue * 0.45359237 * 100) / 100
+                                    : weightValue,
                               });
-
-                              // Sanitize reps and weight input
-                              const reps =
-                                typeof manual.reps === "number" ? manual.reps : Number(manual.reps);
-                              const weight =
-                                typeof manual.weight === "number"
-                                  ? manual.weight
-                                  : Number(manual.weight);
-
-                              // Only push manual log if user entered something
-                              if (!isNaN(reps) || !isNaN(weight)) {
-                                auto.push({
-                                  id: uid(),
-                                  date: sessionDate,
-                                  name: st.label,
-                                  sets: 1,
-                                  reps: isNaN(reps) ? 0 : reps,
-                                  weightKg:
-                                    isNaN(weight)
-                                      ? undefined
-                                      : unit === "lb"
-                                      ? Math.round(weight * 0.45359237 * 100) / 100
-                                      : weight,
-                                });
-                              }
                             }
                           }
 
@@ -1054,10 +1357,23 @@ export default function DancerSplitTracker() {
               {sessionActive && sessionMode === "sets" ? (
                 <Card className="rounded-2xl shadow-sm">
                   <CardHeader>
-                    <CardTitle className="text-lg">
-                      Session — Day {sessionDay}
-                      <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
-                    </CardTitle>
+                    <div className="flex justify-between items-start">
+                      <CardTitle className="text-lg">
+                        Session — Day {sessionDay}
+                        <span className="text-slate-500 text-sm ml-2">{sessionDate}</span>
+                      </CardTitle>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setShowWorkoutPreview(true);
+                          setEditingExerciseIndex(null);
+                        }}
+                        className="rounded-lg"
+                      >
+                        Edit Workout
+                      </Button>
+                    </div>
                   </CardHeader>
                   <CardContent className="space-y-4 text-sm">
                     <div>
@@ -1068,6 +1384,13 @@ export default function DancerSplitTracker() {
                         value={sessionDate}
                         onChange={(e) => setSessionDate(e.target.value)}
                       />
+                    </div>
+
+                    {/* Exercise list indicator */}
+                    <div className="flex items-center gap-2 text-xs text-slate-500 pb-2 border-b">
+                      <span>Exercise {sessionIdx + 1} of {sessionPlan.length}</span>
+                      <span>•</span>
+                      <span>{sessionPlan.map((e) => e.name).join(", ")}</span>
                     </div>
 
                     <div className="flex items-center justify-between">
@@ -1478,9 +1801,55 @@ export default function DancerSplitTracker() {
                     </div>
 
                     <div className="md:col-span-2">
-                      <Label>Exercise</Label>
-                      <Input placeholder="Exercise name" value={wName}
-                        onChange={(e) => setWName(e.target.value)} />
+                      <div className="flex items-center gap-2 mb-1">
+                        <Label>Exercise</Label>
+                        <label className="text-xs text-slate-500 flex items-center gap-1 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={wOpenEntry}
+                            onChange={(e) => {
+                              setWOpenEntry(e.target.checked);
+                              if (e.target.checked) {
+                                setWExerciseId("");
+                                setWName("");
+                              } else {
+                                setWName("");
+                              }
+                            }}
+                            className="w-3 h-3"
+                          />
+                          Open Entry
+                        </label>
+                      </div>
+                      {wOpenEntry ? (
+                        <Input 
+                          placeholder="Exercise name (will be added to library)" 
+                          value={wName}
+                          onChange={(e) => setWName(e.target.value)} 
+                        />
+                      ) : (
+                        <Select 
+                          value={wExerciseId} 
+                          onValueChange={(id) => {
+                            setWExerciseId(id);
+                            const exercise = exercises.find((e) => e.id === id);
+                            if (exercise) {
+                              setWName(exercise.name);
+                            }
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select exercise from library" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {exercises.map((ex) => (
+                              <SelectItem key={ex.id} value={ex.id}>
+                                {ex.name} {ex.muscleGroups.length > 0 && `(${ex.muscleGroups[0]})`}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
 
                     <div className="md:col-span-2">
@@ -1506,6 +1875,24 @@ export default function DancerSplitTracker() {
                             const secs = Number(wSeconds);
                             if (!name) return alert("Enter a name");
                             if (!Number.isFinite(secs) || secs <= 0) return alert("Enter seconds > 0");
+                            
+                            // If open entry, add exercise to library
+                            if (wOpenEntry && !exercises.some((e) => e.name.toLowerCase() === name.toLowerCase())) {
+                              const newExercise: Exercise = {
+                                id: uid(),
+                                name,
+                                category: "other",
+                                muscleGroups: [],
+                                isTimed: true,
+                                defaultSeconds: secs,
+                                defaultSets: 1,
+                                defaultRestSec: 60,
+                              };
+                              const updatedExercises = [...exercises, newExercise];
+                              setExercises(updatedExercises);
+                              saveExercises(updatedExercises);
+                            }
+
                             const entry: WorkoutEntry = {
                               id: uid(),
                               date: sessionDate,
@@ -1515,7 +1902,10 @@ export default function DancerSplitTracker() {
                             };
                             const withPR = markPRsBeforeInsert(workouts, [entry]);
                             setWorkouts(prev => [...withPR, ...prev]);
-                            setWName(""); setWSeconds("");
+                            setWName(""); 
+                            setWSeconds("");
+                            setWExerciseId("");
+                            setWOpenEntry(false);
                           }}>
                             Add Timed
                           </Button>
@@ -1545,6 +1935,26 @@ export default function DancerSplitTracker() {
                             if (!Number.isFinite(sets) || sets <= 0) return alert("Sets > 0");
                             if (!Number.isFinite(reps) || reps <= 0) return alert("Reps > 0");
                             if (rawWeight !== undefined && (!Number.isFinite(rawWeight) || rawWeight < 0)) return alert("Weight ≥ 0");
+                            
+                            // If open entry, add exercise to library
+                            if (wOpenEntry && !exercises.some((e) => e.name.toLowerCase() === name.toLowerCase())) {
+                              // Extract rep range if sets > 1 (use reps as both min and max, or allow user to specify)
+                              const repRange: [number, number] = [reps, reps];
+                              const newExercise: Exercise = {
+                                id: uid(),
+                                name,
+                                category: "strength",
+                                muscleGroups: [],
+                                defaultRepRange: repRange,
+                                defaultSets: sets,
+                                defaultRestSec: 90,
+                                isTimed: false,
+                              };
+                              const updatedExercises = [...exercises, newExercise];
+                              setExercises(updatedExercises);
+                              saveExercises(updatedExercises);
+                            }
+
                             const entry: WorkoutEntry = {
                               id: uid(),
                               date: sessionDate,
@@ -1556,6 +1966,11 @@ export default function DancerSplitTracker() {
                             const withPR = markPRsBeforeInsert(workouts, [entry]);
                             setWorkouts(prev => [...withPR, ...prev]);
                             setWName("");
+                            setWExerciseId("");
+                            setWOpenEntry(false);
+                            setWSets("3");
+                            setWReps("10");
+                            setWWeight("");
                           }}>
                             Add Sets/Reps
                           </Button>
@@ -1579,11 +1994,15 @@ export default function DancerSplitTracker() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {dancerSplit.map((d) => (
-                            <SelectItem key={d.day} value={String(d.day)}>
-                              Day {d.day}
-                            </SelectItem>
-                          ))}
+                          {dancerSplit.length > 0 ? (
+                            dancerSplit.map((d) => (
+                              <SelectItem key={d.day} value={String(d.day)}>
+                                Day {d.day}: {d.title}
+                              </SelectItem>
+                            ))
+                          ) : (
+                            <SelectItem value="1" disabled>Loading...</SelectItem>
+                          )}
                         </SelectContent>
                       </Select>
                     </div>
@@ -1599,9 +2018,11 @@ export default function DancerSplitTracker() {
                       <Button
                         className="w-full rounded-xl"
                         onClick={() => {
-                          startSession(sessionDay);
+                          setPreviewDay(sessionDay);
+                          setShowWorkoutPreview(true);
                           setActiveTopTab("track");
                         }}
+                        disabled={dancerSplit.length === 0}
                       >
                         Start
                       </Button>
@@ -1620,6 +2041,35 @@ export default function DancerSplitTracker() {
               exerciseFilter={exerciseFilter}
               setExerciseFilter={setExerciseFilter}
               uniqueExercises={uniqueExercises}
+              activePlan={activePlan}
+              programStartDate={profile.programStartDate}
+              preferredDays={profile.preferredDays as any}
+              daysPerWeek={profile.daysPerWeek}
+              setWorkouts={setWorkouts}
+            />
+          </TabsContent>
+
+          {/* LIBRARY TAB */}
+          <TabsContent value="library">
+            <LibraryTab
+              exercises={exercises}
+              workouts={workoutLibrary}
+              plans={plans}
+              onUpdateExercises={(ex) => {
+                setExercises(ex);
+                saveExercises(ex);
+              }}
+              onUpdateWorkouts={(w) => {
+                setWorkoutLibrary(w);
+                saveWorkouts(w);
+              }}
+              onUpdatePlans={(p) => {
+                setPlans(p);
+                savePlans(p);
+              }}
+              onSelectPlan={(plan) => {
+                setActivePlan(plan);
+              }}
             />
           </TabsContent>
         </Tabs>

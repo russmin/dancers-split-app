@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, Download, User } from "lucide-react";
+import { WorkoutPlan } from "@/lib/workoutLibrary";
 
 type Goal = "strength" | "hypertrophy" | "endurance" | "general" | "";
 
@@ -40,6 +41,11 @@ interface Props {
   // unit conversion helpers
   fromKg: (kg: number, unit: "kg" | "lb") => number;
   toKg: (val: number, unit: "kg" | "lb") => number;
+
+  // plan management
+  activePlan: WorkoutPlan | null;
+  availablePlans: WorkoutPlan[];
+  onSelectPlan: (planId: string) => void;
 }
 
 export default function ProfileTab({
@@ -54,6 +60,9 @@ export default function ProfileTab({
   onImportFile,
   fromKg,
   toKg,
+  activePlan,
+  availablePlans,
+  onSelectPlan,
 }: Props) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -143,34 +152,87 @@ export default function ProfileTab({
         <CardHeader><CardTitle className="text-lg">Program</CardTitle></CardHeader>
         <CardContent className="space-y-3 text-sm">
           <div>
-            <Label htmlFor="programName">Program Name</Label>
-            <Input id="programName" placeholder="e.g., Final 4-Day Dancer's Split"
-              value={profile.programName as any}
-              onChange={(e) => onChange("programName" as any, e.target.value)} />
+            <Label htmlFor="programName">Select Program from Library</Label>
+            <Select 
+              value={activePlan?.id || ""} 
+              onValueChange={(planId) => {
+                if (planId) {
+                  onSelectPlan(planId);
+                }
+              }}
+            >
+              <SelectTrigger id="programName">
+                <SelectValue placeholder="Select a program..." />
+              </SelectTrigger>
+              <SelectContent>
+                {availablePlans.length === 0 ? (
+                  <SelectItem value="" disabled>No plans available. Create one in the Library tab.</SelectItem>
+                ) : (
+                  availablePlans.map((plan) => (
+                    <SelectItem key={plan.id} value={plan.id}>
+                      {plan.name} {plan.startDate && "(Active)"}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+            {activePlan && (
+              <div className="mt-2 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <div className="font-semibold text-sm text-blue-900">Current Active Program</div>
+                <div className="text-xs text-blue-700 mt-1">{activePlan.name}</div>
+                {activePlan.description && (
+                  <div className="text-xs text-blue-600 mt-1">{activePlan.description}</div>
+                )}
+                <div className="text-xs text-blue-600 mt-1">
+                  {activePlan.days.length} days • {activePlan.daysPerWeek ?? "?"} days/week • {activePlan.durationWeeks ?? "?"} weeks
+                  {activePlan.startDate && (
+                    <span> • Started: {new Date(activePlan.startDate).toLocaleDateString()}</span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-3">
             <div>
               <Label htmlFor="duration">Duration (weeks)</Label>
-              <Input id="duration" inputMode="numeric"
+              <Input 
+                id="duration" 
+                inputMode="numeric"
                 value={profile.programDurationWeeks as any}
-                onChange={(e) => onChange("programDurationWeeks" as any, e.target.value === "" ? "" : Number(e.target.value))} />
+                onChange={(e) => onChange("programDurationWeeks" as any, e.target.value === "" ? "" : Number(e.target.value))}
+                disabled={!!activePlan}
+              />
+              {activePlan && (
+                <div className="text-xs text-slate-500 mt-1">Set by selected program</div>
+              )}
             </div>
             <div>
               <Label htmlFor="dpw">Days / week</Label>
-              <Input id="dpw" inputMode="numeric"
+              <Input 
+                id="dpw" 
+                inputMode="numeric"
                 value={profile.daysPerWeek as any}
-                onChange={(e) => onChange("daysPerWeek" as any, e.target.value === "" ? "" : Number(e.target.value))} />
+                onChange={(e) => onChange("daysPerWeek" as any, e.target.value === "" ? "" : Number(e.target.value))}
+                disabled={!!activePlan}
+              />
+              {activePlan && (
+                <div className="text-xs text-slate-500 mt-1">Set by selected program</div>
+              )}
             </div>
             <div>
-            <Label htmlFor="programStart">Program Start Date</Label>
-            <Input
-              id="programStart"
-              type="date"
-              value={(profile.programStartDate as any) || ""}
-              onChange={(e) => onChange("programStartDate" as any, e.target.value)}
-            />
-          </div>
+              <Label htmlFor="programStart">Program Start Date</Label>
+              <Input
+                id="programStart"
+                type="date"
+                value={(profile.programStartDate as any) || ""}
+                onChange={(e) => onChange("programStartDate" as any, e.target.value)}
+                disabled={!!activePlan}
+              />
+              {activePlan && (
+                <div className="text-xs text-slate-500 mt-1">Set by selected program</div>
+              )}
+            </div>
 
             <div>
               <Label>&nbsp;</Label>
