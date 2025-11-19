@@ -10,8 +10,18 @@ import WorkoutPreview from "@/components/WorkoutPreview";
 import RestTimer from "@/components/TrackSession/RestTimer";
 
 // Lazy load large tab components
-const ProgressTab = lazy(() => import("./Progress/ProgressTab"));
-const LibraryTab = lazy(() => import("@/components/LibraryTab"));
+const ProgressTab = lazy(() => 
+  import("./Progress/ProgressTab").catch((err) => {
+    console.error("Failed to load ProgressTab:", err);
+    throw err;
+  })
+);
+const LibraryTab = lazy(() => 
+  import("./components/LibraryTab").catch((err) => {
+    console.error("Failed to load LibraryTab:", err);
+    throw err;
+  })
+);
 
 import { markPRsBeforeInsert } from "@/lib/pr";
 // If you keep a manual-log picker you can re-enable this import.
